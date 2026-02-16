@@ -31,6 +31,7 @@ pub struct AuthResponse {
     pub avatar_color: i32,
     pub about: String,
     pub avatar_url: Option<String>,
+    pub banner_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -40,6 +41,7 @@ pub struct UpdateProfile {
     pub avatar_color: Option<i32>,
     pub password: Option<String>,
     pub avatar_url: Option<String>,
+    pub banner_url: Option<String>,
 }
 
 // ── JWT helpers ─────────────────────────────────────────
@@ -135,6 +137,7 @@ pub async fn register(
         avatar_color: 0,
         about: "".to_string(),
         avatar_url: None,
+        banner_url: None,
     })
 }
 
@@ -143,7 +146,7 @@ pub async fn login(
     body: web::Json<AuthPayload>,
 ) -> HttpResponse {
     // We select all user fields now
-    let row = sqlx::query("SELECT id, password_hash, role, avatar_color, about, avatar_url FROM users WHERE username = ?")
+    let row = sqlx::query("SELECT id, password_hash, role, avatar_color, about, avatar_url, banner_url FROM users WHERE username = ?")
         .bind(&body.username)
         .fetch_optional(pool.get_ref())
         .await
@@ -156,6 +159,7 @@ pub async fn login(
         let avatar_color: i32 = row.try_get("avatar_color").unwrap_or(0);
         let about: String = row.try_get("about").unwrap_or_default();
         let avatar_url: Option<String> = row.try_get("avatar_url").unwrap_or(None);
+        let banner_url: Option<String> = row.try_get("banner_url").unwrap_or(None);
 
         if verify(&body.password, &password_hash).unwrap_or(false) {
             let token = create_token(&id, &body.username, &role);
@@ -167,6 +171,7 @@ pub async fn login(
                 avatar_color,
                 about,
                 avatar_url,
+                banner_url,
             })
         } else {
             HttpResponse::Unauthorized().json(serde_json::json!({ "error": "Invalid password" }))
@@ -185,7 +190,7 @@ pub async fn get_me(
         None => return HttpResponse::Unauthorized().finish(),
     };
 
-    let row = sqlx::query("SELECT username, role, avatar_color, about FROM users WHERE id = ?")
+    let row = sqlx::query("SELECT username, role, avatar_color, about, avatar_url, banner_url FROM users WHERE id = ?")
         .bind(&claims.sub)
         .fetch_optional(pool.get_ref())
         .await
@@ -197,6 +202,7 @@ pub async fn get_me(
          let avatar_color: i32 = row.try_get("avatar_color").unwrap_or(0);
          let about: String = row.try_get("about").unwrap_or_default();
          let avatar_url: Option<String> = row.try_get("avatar_url").unwrap_or(None);
+         let banner_url: Option<String> = row.try_get("banner_url").unwrap_or(None);
 
          HttpResponse::Ok().json(serde_json::json!({
              "user_id": claims.sub,
@@ -205,6 +211,7 @@ pub async fn get_me(
              "avatar_color": avatar_color,
              "about": about,
              "avatar_url": avatar_url,
+             "banner_url": banner_url,
          }))
     } else {
         HttpResponse::NotFound().finish()
@@ -247,6 +254,9 @@ pub async fn update_profile(
     if body.avatar_url.is_some() {
         set_clauses.push("avatar_url = ?");
     }
+    if body.banner_url.is_some() {
+        set_clauses.push("banner_url = ?");
+    }
 
     if set_clauses.is_empty() {
         return HttpResponse::Ok().json(serde_json::json!({ "status": "no changes" }));
@@ -273,13 +283,16 @@ pub async fn update_profile(
     if let Some(avatar_url) = &body.avatar_url {
         query = query.bind(avatar_url.clone());
     }
+    if let Some(banner_url) = &body.banner_url {
+        query = query.bind(banner_url.clone());
+    }
 
     query = query.bind(&claims.sub);
 
     match query.execute(pool.get_ref()).await {
         Ok(_) => {
             // Fetch updated user to broadcast
-            let user_row = sqlx::query("SELECT username, role, about, avatar_color, avatar_url FROM users WHERE id = ?")
+            let user_row = sqlx::query("SELECT username, role, about, avatar_color, avatar_url, banner_url FROM users WHERE id = ?")
                 .bind(&claims.sub)
                 .fetch_optional(pool.get_ref())
                 .await
@@ -292,6 +305,7 @@ pub async fn update_profile(
                  let about: String = row.get("about");
                  let avatar_color: i32 = row.try_get("avatar_color").unwrap_or(0);
                  let avatar_url: Option<String> = row.try_get("avatar_url").unwrap_or(None);
+                 let banner_url: Option<String> = row.try_get("banner_url").unwrap_or(None);
 
                  let event = serde_json::json!({
                      "type": "join", // handled as upsert by frontend
@@ -300,7 +314,8 @@ pub async fn update_profile(
                      "role": role,
                      "about": about,
                      "avatar_color": avatar_color,
-                     "avatar_url": avatar_url
+                     "avatar_url": avatar_url,
+                     "banner_url": banner_url
                  });
                  let _ = broadcaster.send(event.to_string());
             }
@@ -317,6 +332,183 @@ pub async fn update_profile(
 #[derive(Deserialize)]
 pub struct UpdateRole {
     pub role: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerRole {
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateServerRole {
+    pub name: String,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ServerUser {
+    pub id: String,
+    pub username: String,
+    pub role: String,
+}
+
+/// GET /api/server/roles — List roles (Admin only)
+pub async fn list_server_roles(
+    req: HttpRequest,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let claims = match extract_claims(&req) {
+        Some(c) => c,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+
+    if claims.role != "admin" {
+        return HttpResponse::Forbidden().json(serde_json::json!({ "error": "Admin only" }));
+    }
+
+    let rows = sqlx::query("SELECT name, color FROM roles ORDER BY CASE WHEN name='admin' THEN 0 WHEN name='user' THEN 1 ELSE 2 END, name ASC")
+        .fetch_all(pool.get_ref())
+        .await;
+
+    match rows {
+        Ok(rows) => {
+            let roles: Vec<ServerRole> = rows
+                .into_iter()
+                .map(|row| ServerRole {
+                    name: row.get("name"),
+                    color: row.get("color"),
+                })
+                .collect();
+            HttpResponse::Ok().json(roles)
+        }
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
+/// POST /api/server/roles — Create role (Admin only)
+pub async fn create_server_role(
+    req: HttpRequest,
+    pool: web::Data<SqlitePool>,
+    body: web::Json<CreateServerRole>,
+) -> HttpResponse {
+    let claims = match extract_claims(&req) {
+        Some(c) => c,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+
+    if claims.role != "admin" {
+        return HttpResponse::Forbidden().json(serde_json::json!({ "error": "Admin only" }));
+    }
+
+    let role_name = body.name.trim().to_lowercase();
+    if role_name.len() < 2 || role_name.len() > 24 {
+        return HttpResponse::BadRequest().json(serde_json::json!({ "error": "Role name must be 2 to 24 chars" }));
+    }
+    if !role_name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return HttpResponse::BadRequest().json(serde_json::json!({ "error": "Role name can only contain a-z, 0-9, _ and -" }));
+    }
+
+    let color = body
+        .color
+        .as_deref()
+        .unwrap_or("#99aab5")
+        .trim()
+        .to_string();
+
+    if color.len() != 7 || !color.starts_with('#') || !color.chars().skip(1).all(|c| c.is_ascii_hexdigit()) {
+        return HttpResponse::BadRequest().json(serde_json::json!({ "error": "Invalid role color (expected #RRGGBB)" }));
+    }
+
+    let result = sqlx::query("INSERT INTO roles (name, color) VALUES (?, ?)")
+        .bind(&role_name)
+        .bind(&color)
+        .execute(pool.get_ref())
+        .await;
+
+    match result {
+        Ok(_) => HttpResponse::Ok().json(serde_json::json!({ "status": "role created" })),
+        Err(_) => HttpResponse::Conflict().json(serde_json::json!({ "error": "Role already exists" })),
+    }
+}
+
+/// DELETE /api/server/roles/{name} — Delete role (Admin only)
+pub async fn delete_server_role(
+    req: HttpRequest,
+    pool: web::Data<SqlitePool>,
+    path: web::Path<String>,
+) -> HttpResponse {
+    let claims = match extract_claims(&req) {
+        Some(c) => c,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+
+    if claims.role != "admin" {
+        return HttpResponse::Forbidden().json(serde_json::json!({ "error": "Admin only" }));
+    }
+
+    let role_name = path.into_inner().trim().to_lowercase();
+    if role_name == "admin" || role_name == "user" {
+        return HttpResponse::BadRequest().json(serde_json::json!({ "error": "This role is protected" }));
+    }
+
+    let _ = sqlx::query("UPDATE users SET role = 'user' WHERE role = ?")
+        .bind(&role_name)
+        .execute(pool.get_ref())
+        .await;
+
+    let result = sqlx::query("DELETE FROM roles WHERE name = ?")
+        .bind(&role_name)
+        .execute(pool.get_ref())
+        .await;
+
+    match result {
+        Ok(res) => {
+            if res.rows_affected() > 0 {
+                HttpResponse::Ok().json(serde_json::json!({ "status": "role deleted" }))
+            } else {
+                HttpResponse::NotFound().json(serde_json::json!({ "error": "Role not found" }))
+            }
+        }
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
+}
+
+/// GET /api/server/users — List users with role (Admin only)
+pub async fn list_server_users(
+    req: HttpRequest,
+    pool: web::Data<SqlitePool>,
+) -> HttpResponse {
+    let claims = match extract_claims(&req) {
+        Some(c) => c,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+
+    if claims.role != "admin" {
+        return HttpResponse::Forbidden().json(serde_json::json!({ "error": "Admin only" }));
+    }
+
+    let rows = sqlx::query("SELECT id, username, role FROM users ORDER BY username ASC")
+        .fetch_all(pool.get_ref())
+        .await;
+
+    match rows {
+        Ok(rows) => {
+            let users: Vec<ServerUser> = rows
+                .into_iter()
+                .map(|row| ServerUser {
+                    id: row.get("id"),
+                    username: row.get("username"),
+                    role: row.get("role"),
+                })
+                .collect();
+            HttpResponse::Ok().json(users)
+        }
+        Err(_) => HttpResponse::InternalServerError().finish(),
+    }
 }
 
 /// PATCH /api/users/{id}/role — Promote/Demote user (Admin only)
@@ -339,8 +531,14 @@ pub async fn update_user_role(
     let target_id = path.into_inner();
     let new_role = &body.role;
 
-    if new_role != "admin" && new_role != "user" {
-         return HttpResponse::BadRequest().json(serde_json::json!({ "error": "Invalid role" }));
+    let role_exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM roles WHERE name = ?")
+        .bind(new_role)
+        .fetch_one(pool.get_ref())
+        .await
+        .unwrap_or(0);
+
+    if role_exists <= 0 {
+        return HttpResponse::BadRequest().json(serde_json::json!({ "error": "Invalid role" }));
     }
 
     let result = sqlx::query("UPDATE users SET role = ? WHERE id = ?")
@@ -352,7 +550,7 @@ pub async fn update_user_role(
     match result {
         Ok(_) => {
             // Fetch updated user to broadcast
-            let user_row = sqlx::query("SELECT username, role, about, avatar_color, avatar_url FROM users WHERE id = ?")
+            let user_row = sqlx::query("SELECT username, role, about, avatar_color, avatar_url, banner_url FROM users WHERE id = ?")
                 .bind(&target_id)
                 .fetch_optional(pool.get_ref())
                 .await
@@ -365,6 +563,7 @@ pub async fn update_user_role(
                  let about: String = row.get("about");
                  let avatar_color: i32 = row.try_get("avatar_color").unwrap_or(0);
                  let avatar_url: Option<String> = row.try_get("avatar_url").unwrap_or(None);
+                 let banner_url: Option<String> = row.try_get("banner_url").unwrap_or(None);
 
                  let event = serde_json::json!({
                      "type": "join", // handled as upsert by frontend
@@ -373,7 +572,8 @@ pub async fn update_user_role(
                      "role": role,
                      "about": about,
                      "avatar_color": avatar_color,
-                     "avatar_url": avatar_url
+                     "avatar_url": avatar_url,
+                     "banner_url": banner_url
                  });
                  let _ = broadcaster.send(event.to_string());
             }

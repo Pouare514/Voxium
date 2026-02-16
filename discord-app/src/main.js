@@ -8,12 +8,43 @@ const WEBRTC_CONFIG = {
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
 };
 
+const COLOR_THEME_PRESETS = {
+    blurple: { accent: "#5865f2", accentHover: "#4752c4", textLink: "#00a8fc" },
+    teal: { accent: "#1abc9c", accentHover: "#0f9d82", textLink: "#36cfc9" },
+    emerald: { accent: "#57f287", accentHover: "#2fbf71", textLink: "#64d8cb" },
+    sunset: { accent: "#fba95f", accentHover: "#f06595", textLink: "#ff922b" },
+    rose: { accent: "#ff5ea8", accentHover: "#d63384", textLink: "#f783ac" },
+    crimson: { accent: "#ed4245", accentHover: "#c0392b", textLink: "#ff6b6b" },
+    amber: { accent: "#f1c40f", accentHover: "#e67e22", textLink: "#ffd43b" },
+    violet: { accent: "#9b59b6", accentHover: "#6c5ce7", textLink: "#b197fc" },
+    midnight: { accent: "#6c5ce7", accentHover: "#5f3dc4", textLink: "#748ffc" },
+    sky: { accent: "#4dabf7", accentHover: "#1c7ed6", textLink: "#74c0fc" },
+};
+
+function hexToRgb(hex) {
+    const normalized = (hex || "").replace("#", "").trim();
+    if (normalized.length !== 6) return { r: 88, g: 101, b: 242 };
+    return {
+        r: parseInt(normalized.slice(0, 2), 16),
+        g: parseInt(normalized.slice(2, 4), 16),
+        b: parseInt(normalized.slice(4, 6), 16),
+    };
+}
+
 function createVoiceState() {
     return {
         joinedRoomId: null,
         localStream: null,
+        screenStream: null,
+        screenTrack: null,
+        screenSharing: false,
+        screenQuality: localStorage.getItem("voiceScreenQuality") || "1080",
+        screenFps: localStorage.getItem("voiceScreenFps") || "30",
         peers: {},
+        screenSenders: {},
         audioEls: {},
+        remoteStreams: {},
+        remoteScreenEls: {},
         members: {},
         muted: false,
         deafened: false,
@@ -28,19 +59,31 @@ let state = {
     role: null,
     avatarColor: 0,
     avatarUrl: null,
+    bannerUrl: null,
+    presence: localStorage.getItem("presence") || "online",
     about: "",
     currentRoomId: null,
     currentRoomName: null,
     currentRoomKind: null,
     ws: null,
     rooms: [],
+    serverRoles: [],
+    serverUsers: [],
     users: {},
+    unreadByRoom: {},
+    mentionByRoom: {},
+    messageMetaById: {},
+    replyingTo: null,
+    pinnedMessageIds: new Set(),
+    threadRootId: null,
     voice: createVoiceState(),
 };
 
 // ── Preferences ────────────────────────────────────────
 let prefs = {
     theme: localStorage.getItem("theme") || "dark",
+    themeColor: localStorage.getItem("themeColor") || "blurple",
+    colorThemeBg: localStorage.getItem("colorThemeBg") !== "false",
     fontSize: parseInt(localStorage.getItem("fontSize") || "15"),
     reduceMotion: localStorage.getItem("reduceMotion") === "true",
     compactMode: localStorage.getItem("compactMode") === "true",
@@ -51,6 +94,15 @@ applyPrefs();
 
 function applyPrefs() {
     document.documentElement.setAttribute("data-theme", prefs.theme);
+    const preset = COLOR_THEME_PRESETS[prefs.themeColor] || COLOR_THEME_PRESETS.blurple;
+    const { r, g, b } = hexToRgb(preset.accent);
+    document.documentElement.style.setProperty("--accent", preset.accent);
+    document.documentElement.style.setProperty("--accent-hover", preset.accentHover);
+    document.documentElement.style.setProperty("--text-link", preset.textLink);
+    document.documentElement.style.setProperty("--theme-tint-strong", `rgba(${r}, ${g}, ${b}, 0.26)`);
+    document.documentElement.style.setProperty("--theme-tint-soft", `rgba(${r}, ${g}, ${b}, 0.12)`);
+    document.documentElement.style.setProperty("--theme-tint-edge", `rgba(${r}, ${g}, ${b}, 0.08)`);
+    document.documentElement.style.setProperty("--theme-tint-opacity", prefs.colorThemeBg ? "0.38" : "0");
     document.documentElement.style.setProperty("--font-size-base", prefs.fontSize + "px");
     document.documentElement.classList.toggle("reduce-motion", prefs.reduceMotion);
     document.documentElement.classList.toggle("compact-mode", prefs.compactMode);
@@ -79,6 +131,11 @@ const messagesContainer = $("#messages-container");
 const messageForm = $("#message-form");
 const messageInput = $("#message-input");
 const messageInputArea = $("#message-input-area");
+const chatArea = document.querySelector(".chat-area");
+const replyPreview = $("#reply-preview");
+const replyTargetName = $("#reply-target-name");
+const replyTargetSnippet = $("#reply-target-snippet");
+const replyCancelBtn = $("#reply-cancel-btn");
 const currentRoomName = $("#current-room-name");
 const roomKindIcon = $("#room-kind-icon");
 const addRoomBtn = $("#add-room-btn");
@@ -86,23 +143,53 @@ const createRoomModal = $("#create-room-modal");
 const createRoomForm = $("#create-room-form");
 const roomNameInput = $("#room-name-input");
 const roomKindInput = $("#room-kind-input");
+const roomRequiredRoleInput = $("#room-required-role-input");
 const cancelRoomBtn = $("#cancel-room-btn");
+const roomSettingsModal = $("#room-settings-modal");
+const roomSettingsForm = $("#room-settings-form");
+const roomSettingsName = $("#room-settings-name");
+const roomSettingsKind = $("#room-settings-kind");
+const roomSettingsRequiredRole = $("#room-settings-required-role");
+const roomPrivacyPublicBtn = $("#room-privacy-public-btn");
+const roomPrivacyPrivateBtn = $("#room-privacy-private-btn");
+const roomSettingsCancelBtn = $("#room-settings-cancel-btn");
+const roomSettingsFeedback = $("#room-settings-feedback");
+const serverSettingsBtn = $("#server-settings-btn");
+const serverSettingsModal = $("#server-settings-modal");
+const serverSettingsCloseBtn = $("#server-settings-close-btn");
+const serverRoleForm = $("#server-role-form");
+const serverRoleName = $("#server-role-name");
+const serverRoleColor = $("#server-role-color");
+const serverRolesList = $("#server-roles-list");
+const serverUserSelect = $("#server-user-select");
+const serverRoleSelect = $("#server-role-select");
+const serverAssignBtn = $("#server-assign-btn");
+const serverSettingsFeedback = $("#server-settings-feedback");
 const userAvatar = $("#user-avatar");
+const selfStatusDot = $("#self-status-dot");
 const userName = $("#user-name");
 const userDiscriminator = $("#user-discriminator");
 const muteBtn = $("#mute-btn");
 const deafenBtn = $("#deafen-btn");
 const deleteRoomBtn = $("#delete-room-btn");
+const pinnedBtn = $("#pinned-btn");
 const membersList = $("#members-list");
 const memberCount = $("#member-count");
 const membersSidebar = $("#members-sidebar");
 const voiceRoomPanel = $("#voice-room-panel");
 const voiceRoomTitle = $("#voice-room-title");
+const voiceRoomSubtitle = $("#voice-room-subtitle");
+const voiceRoomChip = $("#voice-room-chip");
 const joinVoiceBtn = $("#join-voice-btn");
 const leaveVoiceBtn = $("#leave-voice-btn");
 const voiceMuteBtn = $("#voice-mute-btn");
 const voiceDeafenBtn = $("#voice-deafen-btn");
+const voiceScreenBtn = $("#voice-screen-btn");
+const voiceScreenQualitySelect = $("#voice-screen-quality");
+const voiceScreenFpsSelect = $("#voice-screen-fps");
 const voiceMembersList = $("#voice-members-list");
+const voiceScreensWrap = $("#voice-screens-wrap");
+const voiceScreensGrid = $("#voice-screens-grid");
 const voiceQuickStatus = $("#voice-quick-status");
 const voiceStatusText = $("#voice-status-text");
 const voiceMeterBars = $("#voice-meter-bars");
@@ -114,11 +201,95 @@ let micMeterSource = null;
 let micMeterData = null;
 let micMeterAnim = null;
 
+function getScreenQualityPreset(value) {
+    if (value === "720") return { width: 1280, height: 720 };
+    if (value === "1080") return { width: 1920, height: 1080 };
+    if (value === "1440") return { width: 2560, height: 1440 };
+    return null;
+}
+
+function getScreenCaptureConstraints() {
+    const qualityValue = state.voice.screenQuality || "auto";
+    const fpsValue = Number.parseInt(state.voice.screenFps || "30", 10);
+    const preset = getScreenQualityPreset(qualityValue);
+
+    const video = {
+        cursor: "always",
+    };
+
+    if (preset) {
+        video.width = { ideal: preset.width };
+        video.height = { ideal: preset.height };
+    }
+
+    if (Number.isFinite(fpsValue) && fpsValue > 0) {
+        video.frameRate = { ideal: fpsValue, max: fpsValue };
+    }
+
+    return { video, audio: false };
+}
+
+function getScreenTrackConstraints() {
+    const qualityValue = state.voice.screenQuality || "auto";
+    const fpsValue = Number.parseInt(state.voice.screenFps || "30", 10);
+    const preset = getScreenQualityPreset(qualityValue);
+
+    const constraints = {};
+    if (preset) {
+        constraints.width = { ideal: preset.width };
+        constraints.height = { ideal: preset.height };
+    }
+    if (Number.isFinite(fpsValue) && fpsValue > 0) {
+        constraints.frameRate = { ideal: fpsValue, max: fpsValue };
+    }
+    return constraints;
+}
+
+async function applyScreenTrackConstraints(track) {
+    if (!track) return;
+    const constraints = getScreenTrackConstraints();
+    if (Object.keys(constraints).length === 0) return;
+    try {
+        await track.applyConstraints(constraints);
+    } catch (err) {
+        console.warn("Impossible d'appliquer exactement la qualité/FPS demandés", err);
+    }
+}
+
+function syncScreenShareSettingsUI() {
+    if (voiceScreenQualitySelect) {
+        voiceScreenQualitySelect.value = state.voice.screenQuality || "1080";
+    }
+    if (voiceScreenFpsSelect) {
+        voiceScreenFpsSelect.value = state.voice.screenFps || "30";
+    }
+}
+
+function updateScreenShareSettingsFromUI() {
+    const quality = voiceScreenQualitySelect ? voiceScreenQualitySelect.value : (state.voice.screenQuality || "1080");
+    const fps = voiceScreenFpsSelect ? voiceScreenFpsSelect.value : (state.voice.screenFps || "30");
+    state.voice.screenQuality = quality;
+    state.voice.screenFps = fps;
+    localStorage.setItem("voiceScreenQuality", quality);
+    localStorage.setItem("voiceScreenFps", fps);
+}
+
+function getScreenProfileLabel(quality, fps) {
+    const qualityLabel = quality === "auto" ? "Auto" : `${quality}p`;
+    return `${qualityLabel} • ${fps} FPS`;
+}
+
 // Settings
 const settingsBtn = $("#settings-btn");
 const settingsModal = $("#settings-modal");
 const closeSettingsBtn = $("#close-settings-btn");
 const logoutSettingsBtn = $("#logout-settings-btn");
+const settingsContentInner = document.querySelector(".settings-content-inner");
+const settingsMiniAvatar = $("#settings-mini-avatar");
+const settingsMiniName = $("#settings-mini-name");
+const settingsSearchInput = $("#settings-search-input");
+const settingsMiniEditBtn = document.querySelector(".settings-mini-edit");
+const colorThemeButtons = document.querySelectorAll(".color-theme-tile[data-theme-color]");
 const updateProfileForm = $("#update-profile-form");
 const settingsUsername = $("#settings-username");
 const settingsAbout = $("#settings-about");
@@ -127,6 +298,9 @@ const settingsAvatar = $("#settings-avatar");
 const settingsUsernameDisplay = $("#settings-username-display");
 const settingsDiscDisplay = $("#settings-disc-display");
 const settingsRoleBadge = $("#settings-role-badge");
+const settingsStatusDot = $("#settings-status-dot");
+const previewStatusDot = $("#preview-status-dot");
+const presenceSelect = $("#presence-select");
 const avatarColorPicker = $("#avatar-color-picker");
 const settingsAvatarColorInput = $("#settings-avatar-color");
 const settingsFeedback = $("#settings-feedback");
@@ -153,8 +327,10 @@ const contextMenu = $("#context-menu");
 const ctxHeaderTitle = $("#ctx-header-title");
 const ctxCopyId = $("#ctx-copy-id");
 const ctxDeleteRoom = $("#ctx-delete-room");
+const ctxRoomSettings = $("#ctx-room-settings");
 const ctxDeleteMessage = $("#ctx-delete-message");
 const ctxPromoteAdmin = $("#ctx-promote-admin");
+const ctxPurgeUserMessages = $("#ctx-purge-user-messages");
 
 // Typing
 const typingIndicator = $("#typing-indicator");
@@ -164,16 +340,59 @@ const typingText = $("#typing-text");
 const userPopout = $("#user-popout");
 const popoutAvatar = $("#popout-avatar");
 const popoutBanner = $("#popout-banner");
+const popoutStatusDot = $("#popout-status-dot");
 const popoutUsername = $("#popout-username");
 const popoutDisc = $("#popout-disc");
 const popoutBadges = $("#popout-badges");
 
+const pinnedModal = $("#pinned-modal");
+const pinnedList = $("#pinned-list");
+const pinnedCloseBtn = $("#pinned-close-btn");
+const threadPanel = $("#thread-panel");
+const threadCloseBtn = $("#thread-close-btn");
+const threadRoot = $("#thread-root");
+const threadReplies = $("#thread-replies");
+const threadForm = $("#thread-form");
+const threadInput = $("#thread-input");
+
 // Chat search
 const chatSearch = $("#chat-search");
+const searchModal = $("#search-modal");
+const searchQueryInput = $("#search-query");
+const searchAuthorInput = $("#search-author");
+const searchFromInput = $("#search-from");
+const searchToInput = $("#search-to");
+const searchRoomScope = $("#search-room-scope");
+const searchResults = $("#search-results");
+const searchCloseBtn = $("#search-close-btn");
+const searchRunBtn = $("#search-run-btn");
+const globalMentionBadge = $("#global-mention-badge");
 
 // Members toggle
 const membersToggleBtn = $("#members-toggle-btn");
 let membersVisible = true;
+const BASE_APP_TITLE = "Discord2";
+
+function getGlobalMentionCount() {
+    return Object.entries(state.mentionByRoom || {}).reduce((sum, [roomId, count]) => {
+        if (roomId === state.currentRoomId) return sum;
+        const value = Number(count) || 0;
+        return sum + Math.max(0, value);
+    }, 0);
+}
+
+function updateGlobalMentionBadge() {
+    const count = getGlobalMentionCount();
+    if (globalMentionBadge) {
+        if (count > 0) {
+            globalMentionBadge.classList.remove("hidden");
+            globalMentionBadge.textContent = count > 99 ? "99+" : String(count);
+        } else {
+            globalMentionBadge.classList.add("hidden");
+        }
+    }
+    document.title = count > 0 ? `(${count}) ${BASE_APP_TITLE}` : BASE_APP_TITLE;
+}
 
 // ── Auth Mode ──────────────────────────────────────────
 let authMode = "login";
@@ -224,10 +443,96 @@ function saveSession(data) {
     state.username = data.username;
     if (data.role) state.role = data.role;
     if (data.avatar_color !== undefined) state.avatarColor = data.avatar_color;
+    if (data.avatar_url !== undefined) state.avatarUrl = data.avatar_url;
+    if (data.banner_url !== undefined) state.bannerUrl = data.banner_url;
     if (data.about !== undefined) state.about = data.about;
     localStorage.setItem("token", data.token);
     localStorage.setItem("userId", data.user_id);
     localStorage.setItem("username", data.username);
+}
+
+function normalizePresence(value) {
+    const v = (value || "").toLowerCase();
+    if (v === "online" || v === "idle" || v === "dnd" || v === "invisible") return v;
+    return "online";
+}
+
+function presenceDotClass(value) {
+    const normalized = normalizePresence(value);
+    if (normalized === "invisible") return "offline";
+    return normalized;
+}
+
+function presenceLabel(value) {
+    const normalized = normalizePresence(value);
+    if (normalized === "idle") return "Absent";
+    if (normalized === "dnd") return "Ne pas déranger";
+    if (normalized === "invisible") return "Hors ligne";
+    return "En ligne";
+}
+
+function applyStatusDot(el, value) {
+    if (!el) return;
+    el.classList.remove("online", "idle", "dnd", "offline");
+    el.classList.add(presenceDotClass(value));
+}
+
+function applyOwnPresenceUI() {
+    applyStatusDot(selfStatusDot, state.presence);
+    applyStatusDot(settingsStatusDot, state.presence);
+    applyStatusDot(previewStatusDot, state.presence);
+    if (presenceSelect) {
+        presenceSelect.value = normalizePresence(state.presence);
+    }
+}
+
+function syncOwnPresenceInUsersMap() {
+    if (!state.userId) return;
+    if (!state.users[state.userId]) {
+        state.users[state.userId] = {
+            username: state.username,
+            avatar_color: state.avatarColor || 0,
+            avatar_url: state.avatarUrl || null,
+            banner_url: state.bannerUrl || null,
+            role: state.role || "user",
+            about: state.about || null,
+            status: normalizePresence(state.presence),
+        };
+    } else {
+        state.users[state.userId].status = normalizePresence(state.presence);
+    }
+}
+
+function applyOwnPresenceState(nextPresence, shouldBroadcast = true) {
+    state.presence = normalizePresence(nextPresence);
+    localStorage.setItem("presence", state.presence);
+    syncOwnPresenceInUsersMap();
+    applyOwnPresenceUI();
+    renderMembers();
+    if (currentPopoutUserId === state.userId && state.users[state.userId]) {
+        renderUserPopoutContent(state.userId, state.users[state.userId]);
+    }
+    if (shouldBroadcast) {
+        broadcastPresence();
+    }
+}
+
+const PRESENCE_CYCLE = ["online", "idle", "dnd", "invisible"];
+
+function cycleOwnPresence() {
+    const current = normalizePresence(state.presence);
+    const idx = PRESENCE_CYCLE.indexOf(current);
+    const next = PRESENCE_CYCLE[(idx + 1) % PRESENCE_CYCLE.length];
+    applyOwnPresenceState(next, true);
+}
+
+function broadcastPresence() {
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+    wsSend({
+        type: "presence",
+        user_id: state.userId,
+        status: normalizePresence(state.presence)
+    });
 }
 
 // ── Logout ─────────────────────────────────────────────
@@ -242,10 +547,11 @@ function logout() {
     localStorage.removeItem("username");
     state = {
         token: null, userId: null, username: null, role: null,
-        avatarColor: 0, about: "",
+        avatarColor: 0, avatarUrl: null, bannerUrl: null, presence: localStorage.getItem("presence") || "online", about: "",
         currentRoomId: null, currentRoomName: null, currentRoomKind: null,
-        ws: null, rooms: [], users: {}, voice: createVoiceState()
+        ws: null, rooms: [], serverRoles: [], serverUsers: [], users: {}, unreadByRoom: {}, mentionByRoom: {}, messageMetaById: {}, replyingTo: null, pinnedMessageIds: new Set(), threadRootId: null, voice: createVoiceState()
     };
+    updateGlobalMentionBadge();
     app.classList.add("hidden");
     settingsModal.classList.add("hidden");
     authModal.classList.remove("hidden");
@@ -278,6 +584,7 @@ async function fetchMyProfile() {
             state.avatarColor = data.avatar_color;
             state.about = data.about;
             state.avatarUrl = data.avatar_url || null;
+            state.bannerUrl = data.banner_url || null;
             updateUserPanel();
         }
     } catch (err) {
@@ -295,6 +602,10 @@ function updateUserPanel() {
     userName.textContent = state.username;
     const disc = (hashString(state.username) % 9000) + 1000;
     userDiscriminator.textContent = `#${disc}`;
+    applyOwnPresenceUI();
+    if (serverSettingsBtn) {
+        serverSettingsBtn.classList.toggle("hidden", state.role !== "admin");
+    }
     if (state.role === "admin") {
         deleteRoomBtn.classList.remove("hidden");
     }
@@ -303,11 +614,14 @@ function updateUserPanel() {
 // ── Load Rooms ─────────────────────────────────────────
 async function loadRooms() {
     try {
-        const res = await fetch(`${API}/api/rooms`);
+        const res = await fetch(`${API}/api/rooms`, {
+            headers: { Authorization: `Bearer ${state.token}` }
+        });
         state.rooms = await res.json();
         state.rooms = state.rooms.map((room) => ({
             ...room,
-            kind: room.kind === "voice" ? "voice" : "text"
+            kind: room.kind === "voice" ? "voice" : "text",
+            required_role: (room.required_role || "user").toLowerCase()
         }));
 
         if (state.currentRoomId && !state.rooms.find((r) => r.id === state.currentRoomId)) {
@@ -337,7 +651,24 @@ function renderRooms() {
     state.rooms.forEach((room) => {
         const li = document.createElement("li");
         const icon = room.kind === "voice" ? "🔊" : "#";
-        li.innerHTML = `<span class="room-icon">${icon}</span><span>${escapeHtml(room.name)}</span>`;
+        const lockBadge = room.required_role !== "user" ? `<span class="room-lock-badge" title="Rôle requis: ${escapeHtml(room.required_role)}">🔒</span>` : "";
+        const unreadCount = room.id === state.currentRoomId ? 0 : (state.unreadByRoom[room.id] || 0);
+        const mentionCount = room.id === state.currentRoomId ? 0 : (state.mentionByRoom[room.id] || 0);
+        const unreadBadge = mentionCount > 0
+            ? `<span class="room-unread-badge mention">@${mentionCount > 99 ? "99+" : mentionCount}</span>`
+            : (unreadCount > 0
+                ? `<span class="room-unread-badge">${unreadCount > 99 ? "99+" : unreadCount}</span>`
+                : "");
+
+        li.innerHTML = `
+            <span class="room-icon">${icon}</span>
+            <span class="room-name">${escapeHtml(room.name)}</span>
+            ${lockBadge}
+            ${unreadBadge}
+        `;
+
+        li.classList.toggle("has-unread", unreadCount > 0 || mentionCount > 0);
+        li.classList.toggle("has-mention", mentionCount > 0);
         if (room.id === state.currentRoomId) li.classList.add("active");
         li.addEventListener("click", () => selectRoom(room));
         li.addEventListener("contextmenu", (e) => showContextMenu(e, "room", room.id, room.name));
@@ -376,6 +707,14 @@ async function selectRoom(room) {
     }
 
     state.currentRoomId = room.id;
+    state.messageMetaById = {};
+    state.pinnedMessageIds = new Set();
+    state.threadRootId = null;
+    hideThreadPanel();
+    clearReplyTarget();
+    state.unreadByRoom[room.id] = 0;
+    state.mentionByRoom[room.id] = 0;
+    updateGlobalMentionBadge();
     state.currentRoomName = room.name;
     state.currentRoomKind = room.kind;
     currentRoomName.textContent = room.name;
@@ -397,9 +736,27 @@ async function selectRoom(room) {
 
 async function loadMessages(roomId) {
     try {
-        const res = await fetch(`${API}/api/rooms/${roomId}/messages`);
+        const res = await fetch(`${API}/api/rooms/${roomId}/messages`, {
+            headers: { Authorization: `Bearer ${state.token}` }
+        });
+        if (!res.ok) {
+            if (res.status === 403) {
+                messagesContainer.innerHTML = `
+                    <div class="welcome-message">
+                        <div class="welcome-icon">🔒</div>
+                        <h2>Accès refusé</h2>
+                        <p>Vous n'avez pas les permissions pour lire ce salon.</p>
+                    </div>
+                `;
+                messageInputArea.classList.add("hidden");
+                return;
+            }
+            throw new Error("Failed to load messages");
+        }
         const messages = await res.json();
         messagesContainer.innerHTML = "";
+        state.messageMetaById = {};
+        state.pinnedMessageIds = new Set();
 
         if (messages.length === 0) {
             messagesContainer.innerHTML = `
@@ -426,6 +783,9 @@ async function loadMessages(roomId) {
 
                 const isFirstInGroup = lastUsername !== msg.username || dateChanged;
                 appendMessage(msg, isFirstInGroup);
+                if (msg.pinned_at) {
+                    state.pinnedMessageIds.add(msg.id);
+                }
                 lastUsername = msg.username;
                 lastDate = msgDate;
             });
@@ -454,6 +814,8 @@ function connectWebSocket() {
             username: state.username,
             avatar_color: state.avatarColor,
             avatar_url: state.avatarUrl || null,
+            banner_url: state.bannerUrl || null,
+            status: normalizePresence(state.presence),
             about: state.about || null,
             role: state.role || "user"
         }));
@@ -466,6 +828,7 @@ function connectWebSocket() {
                 username: state.username,
                 muted: state.voice.muted,
                 deafened: state.voice.deafened,
+                screen_sharing: state.voice.screenSharing,
             }));
         }
     };
@@ -483,6 +846,17 @@ function connectWebSocket() {
                 }
                 appendMessage(msg, isFirstInGroup);
                 scrollToBottom();
+                if (state.threadRootId && (msg.id === state.threadRootId || msg.reply_to_id === state.threadRootId)) {
+                    renderThreadPanel();
+                }
+            }
+            else if (msg.type === "message" && msg.room_id && msg.username !== state.username) {
+                state.unreadByRoom[msg.room_id] = (state.unreadByRoom[msg.room_id] || 0) + 1;
+                if (messageMentionsCurrentUser(msg.content || "")) {
+                    state.mentionByRoom[msg.room_id] = (state.mentionByRoom[msg.room_id] || 0) + 1;
+                }
+                updateGlobalMentionBadge();
+                renderRooms();
             }
             if (msg.type === "join") {
                 if (msg.user_id && msg.username) {
@@ -490,13 +864,23 @@ function connectWebSocket() {
                         username: msg.username,
                         avatar_color: msg.avatar_color || 0,
                         avatar_url: msg.avatar_url || null,
+                        banner_url: msg.banner_url || null,
+                        status: normalizePresence(msg.status || "online"),
                         role: msg.role || "user",
                         about: msg.about || null,
-                        about: msg.about || null
                     };
                     renderMembers();
 
                     // Update popout if open for this user
+                    if (currentPopoutUserId === msg.user_id) {
+                        renderUserPopoutContent(msg.user_id, state.users[msg.user_id]);
+                    }
+                }
+            }
+            else if (msg.type === "presence") {
+                if (msg.user_id && state.users[msg.user_id]) {
+                    state.users[msg.user_id].status = normalizePresence(msg.status || "online");
+                    renderMembers();
                     if (currentPopoutUserId === msg.user_id) {
                         renderUserPopoutContent(msg.user_id, state.users[msg.user_id]);
                     }
@@ -512,6 +896,11 @@ function connectWebSocket() {
                 }
             }
             else if (msg.type === "room_deleted") {
+                if (msg.room_id) {
+                    delete state.unreadByRoom[msg.room_id];
+                    delete state.mentionByRoom[msg.room_id];
+                    updateGlobalMentionBadge();
+                }
                 if (state.currentRoomId === msg.room_id) {
                     if (state.voice.joinedRoomId === msg.room_id) {
                         leaveVoiceRoom();
@@ -529,10 +918,92 @@ function connectWebSocket() {
                 }
                 loadRooms();
             }
+            else if (msg.type === "room_updated") {
+                if (msg.room_id) {
+                    const room = state.rooms.find((r) => r.id === msg.room_id);
+                    if (room) {
+                        if (msg.name) room.name = String(msg.name);
+                        if (msg.kind) room.kind = String(msg.kind) === "voice" ? "voice" : "text";
+                        if (msg.required_role) room.required_role = String(msg.required_role).toLowerCase();
+
+                        if (state.currentRoomId === room.id) {
+                            state.currentRoomName = room.name;
+                            state.currentRoomKind = room.kind;
+                            currentRoomName.textContent = room.name;
+                            messageInput.placeholder = `Envoyer un message dans #${room.name}`;
+                            updateRoomModeUI(room.kind, room.name);
+                            if (room.kind === "text") {
+                                loadMessages(room.id);
+                            }
+                        }
+
+                        renderRooms();
+                    } else {
+                        loadRooms();
+                    }
+                }
+            }
             else if (msg.type === "message_deleted") {
                 if (msg.room_id === state.currentRoomId) {
                     const el = messagesContainer.querySelector(`.message[data-id="${msg.id}"]`);
                     if (el) el.remove();
+                }
+                if (msg.id && state.messageMetaById[msg.id]) {
+                    delete state.messageMetaById[msg.id];
+                }
+                if (msg.id) {
+                    state.pinnedMessageIds.delete(msg.id);
+                }
+                if (state.threadRootId === msg.id) {
+                    hideThreadPanel();
+                } else if (state.threadRootId) {
+                    renderThreadPanel();
+                }
+                if (state.replyingTo?.id === msg.id) {
+                    clearReplyTarget();
+                }
+            }
+            else if (msg.type === "message_pinned") {
+                if (msg.room_id === state.currentRoomId && msg.id) {
+                    state.pinnedMessageIds.add(msg.id);
+                    const hasFlag = messagesContainer.querySelector(`.message[data-id="${msg.id}"] .message-pinned-flag`);
+                    if (!hasFlag) {
+                        const body = messagesContainer.querySelector(`.message[data-id="${msg.id}"] .message-body`);
+                        if (body) {
+                            const flag = document.createElement("div");
+                            flag.className = "message-pinned-flag";
+                            flag.textContent = "📌 Message épinglé";
+                            body.prepend(flag);
+                        }
+                    }
+                    if (pinnedModal && !pinnedModal.classList.contains("hidden")) {
+                        loadPinnedMessages();
+                    }
+                }
+            }
+            else if (msg.type === "message_unpinned") {
+                if (msg.room_id === state.currentRoomId && msg.id) {
+                    state.pinnedMessageIds.delete(msg.id);
+                    const flag = messagesContainer.querySelector(`.message[data-id="${msg.id}"] .message-pinned-flag`);
+                    if (flag) flag.remove();
+                    if (pinnedModal && !pinnedModal.classList.contains("hidden")) {
+                        loadPinnedMessages();
+                    }
+                }
+            }
+            else if (msg.type === "messages_purged") {
+                if (state.currentRoomKind === "text") {
+                    const selector = `.message[data-user-id="${msg.user_id}"]`;
+                    messagesContainer.querySelectorAll(selector).forEach((el) => el.remove());
+                }
+                Object.keys(state.messageMetaById).forEach((id) => {
+                    if (state.messageMetaById[id]?.user_id === msg.user_id) {
+                        delete state.messageMetaById[id];
+                        state.pinnedMessageIds.delete(id);
+                    }
+                });
+                if (state.threadRootId) {
+                    renderThreadPanel();
                 }
             }
             else if (msg.type === "typing") {
@@ -565,11 +1036,22 @@ function updateVoiceButtons() {
     leaveVoiceBtn.classList.toggle("hidden", !inVoice);
     voiceMuteBtn.classList.toggle("hidden", !inVoice);
     voiceDeafenBtn.classList.toggle("hidden", !inVoice);
+    voiceScreenBtn.classList.toggle("hidden", !inVoice);
 
     const muteLabel = state.voice.muted ? "Réactiver micro" : "Muet";
     const deafenLabel = state.voice.deafened ? "Réactiver casque" : "Sourdine";
-    voiceMuteBtn.textContent = muteLabel;
-    voiceDeafenBtn.textContent = deafenLabel;
+    const screenLabel = state.voice.screenSharing ? "Arrêter partage" : "Partager écran";
+    voiceMuteBtn.title = muteLabel;
+    voiceMuteBtn.setAttribute("aria-label", muteLabel);
+    voiceDeafenBtn.title = deafenLabel;
+    voiceDeafenBtn.setAttribute("aria-label", deafenLabel);
+    voiceScreenBtn.title = screenLabel;
+    voiceScreenBtn.setAttribute("aria-label", screenLabel);
+
+    voiceMuteBtn.classList.toggle("is-danger", state.voice.muted);
+    voiceDeafenBtn.classList.toggle("is-danger", state.voice.deafened);
+    voiceScreenBtn.classList.toggle("is-good", state.voice.screenSharing);
+
     muteBtn.title = muteLabel;
     deafenBtn.title = deafenLabel;
 }
@@ -598,16 +1080,39 @@ function updateVoiceQuickStatus() {
     if (!voiceQuickStatus || !voiceStatusText) return;
 
     voiceQuickStatus.classList.remove("is-selected", "is-connected");
+    if (voiceRoomChip) {
+        voiceRoomChip.classList.remove("is-live", "is-selected");
+    }
 
     if (state.voice.joinedRoomId) {
         const room = state.rooms.find((r) => r.id === state.voice.joinedRoomId);
         voiceQuickStatus.classList.add("is-connected");
         voiceStatusText.textContent = `Connecté : ${room ? room.name : "salon vocal"}`;
+        if (voiceRoomChip) {
+            voiceRoomChip.textContent = "Connecté";
+            voiceRoomChip.classList.add("is-live");
+        }
+        if (voiceRoomSubtitle) {
+            voiceRoomSubtitle.textContent = `Discussion active dans ${room ? room.name : "ce salon"}.`;
+        }
     } else if (state.currentRoomKind === "voice" && state.currentRoomName) {
         voiceQuickStatus.classList.add("is-selected");
         voiceStatusText.textContent = `Sélectionné : ${state.currentRoomName}`;
+        if (voiceRoomChip) {
+            voiceRoomChip.textContent = "Sélectionné";
+            voiceRoomChip.classList.add("is-selected");
+        }
+        if (voiceRoomSubtitle) {
+            voiceRoomSubtitle.textContent = "Rejoignez ce salon pour discuter en audio.";
+        }
     } else {
         voiceStatusText.textContent = "Pas connecté à un salon vocal";
+        if (voiceRoomChip) {
+            voiceRoomChip.textContent = "Non connecté";
+        }
+        if (voiceRoomSubtitle) {
+            voiceRoomSubtitle.textContent = "Sélectionnez un salon vocal pour commencer.";
+        }
     }
 
     renderMicMeter(0);
@@ -693,16 +1198,113 @@ function renderVoiceMembers() {
     members.sort((a, b) => a.username.localeCompare(b.username, "fr"));
     members.forEach((member) => {
         const li = document.createElement("li");
-        const suffix = [];
-        if (member.muted) suffix.push("muet");
-        if (member.deafened) suffix.push("sourdine");
-        const stateLabel = suffix.length ? suffix.join(" · ") : "en ligne";
+        li.className = "voice-member-row";
+
+        const userMeta = state.users[member.user_id] || {};
+        const colorRaw = typeof userMeta.avatar_color === "number"
+            ? userMeta.avatar_color
+            : hashString(member.username || "u");
+        const colorIndex = ((colorRaw % 8) + 8) % 8;
+
+        const avatarHtml = userMeta.avatar_url
+            ? `<img src="${API}${userMeta.avatar_url}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
+            : escapeHtml((member.username || "U")[0].toUpperCase());
+
+        const badges = [];
+        if (member.muted) badges.push('<span class="voice-badge is-danger">Muet</span>');
+        if (member.deafened) badges.push('<span class="voice-badge is-danger">Casque</span>');
+        if (member.screenSharing) badges.push('<span class="voice-badge is-good">Écran</span>');
+        if (badges.length === 0) badges.push('<span class="voice-badge">En ligne</span>');
+
         li.innerHTML = `
-            <span>${escapeHtml(member.username)}${member.user_id === state.userId ? " (vous)" : ""}</span>
-            <span class="voice-member-state">${escapeHtml(stateLabel)}</span>
+            <div class="voice-member-main">
+                <div class="voice-member-avatar avatar-bg-${colorIndex}">${avatarHtml}</div>
+                <span class="voice-member-name">${escapeHtml(member.username)}${member.user_id === state.userId ? " (vous)" : ""}</span>
+            </div>
+            <div class="voice-member-badges">${badges.join("")}</div>
         `;
         voiceMembersList.appendChild(li);
     });
+}
+
+function updateVoiceScreensVisibility() {
+    if (!voiceScreensWrap || !voiceScreensGrid) return;
+    voiceScreensWrap.classList.remove("hidden");
+}
+
+function removeRemoteScreenTile(userId) {
+    if (!voiceScreensGrid) return;
+    const tile = state.voice.remoteScreenEls[userId];
+    if (tile) {
+        tile.remove();
+        delete state.voice.remoteScreenEls[userId];
+    }
+    updateVoiceScreensVisibility();
+}
+
+function syncRemoteScreenTile(userId, stream) {
+    if (!voiceScreensGrid) return;
+    const hasLiveVideo = !!stream && stream.getVideoTracks().some((track) => track.readyState === "live");
+    if (!hasLiveVideo) {
+        removeRemoteScreenTile(userId);
+        return;
+    }
+
+    let tile = state.voice.remoteScreenEls[userId];
+    if (!tile) {
+        tile = document.createElement("div");
+        tile.className = "voice-screen-tile";
+
+        const video = document.createElement("video");
+        video.className = "voice-screen-video";
+        video.autoplay = true;
+        video.playsInline = true;
+
+        const label = document.createElement("span");
+        label.className = "voice-screen-label";
+
+        const meta = document.createElement("span");
+        meta.className = "voice-screen-meta";
+
+        tile.appendChild(video);
+        tile.appendChild(label);
+        tile.appendChild(meta);
+        voiceScreensGrid.appendChild(tile);
+        state.voice.remoteScreenEls[userId] = tile;
+    }
+
+    tile.classList.toggle("is-self", userId === state.userId);
+
+    const video = tile.querySelector("video");
+    const label = tile.querySelector(".voice-screen-label");
+    const meta = tile.querySelector(".voice-screen-meta");
+    if (video && video.srcObject !== stream) {
+        video.srcObject = stream;
+    }
+    if (video) {
+        video.play().catch(() => {
+            // autoplay peut être bloqué sans interaction
+        });
+    }
+
+    const username = state.voice.members[userId]?.username || state.users[userId]?.username || "Utilisateur";
+    if (label) {
+        label.textContent = userId === state.userId
+            ? "Vous partagez votre écran"
+            : `${username} partage son écran`;
+    }
+
+    if (meta) {
+        if (userId === state.userId) {
+            meta.textContent = getScreenProfileLabel(state.voice.screenQuality || "auto", state.voice.screenFps || "30");
+            meta.classList.remove("hidden");
+        } else {
+            meta.textContent = "";
+            meta.classList.add("hidden");
+        }
+    }
+
+    updateVoiceScreensVisibility();
 }
 
 function applyLocalTrackState() {
@@ -720,6 +1322,7 @@ function ensureVoiceMember(userId, username) {
             username: username || state.users[userId]?.username || "Utilisateur",
             muted: false,
             deafened: false,
+            screenSharing: false,
         };
     }
 }
@@ -739,10 +1342,21 @@ function cleanupRemotePeer(userId) {
         audioEl.remove();
         delete state.voice.audioEls[userId];
     }
+
+    delete state.voice.remoteStreams[userId];
+    delete state.voice.screenSenders[userId];
+    removeRemoteScreenTile(userId);
 }
 
 function resetVoiceConnections() {
     Object.keys(state.voice.peers).forEach((userId) => cleanupRemotePeer(userId));
+    if (voiceScreensGrid) {
+        voiceScreensGrid.innerHTML = "";
+    }
+    state.voice.remoteScreenEls = {};
+    state.voice.remoteStreams = {};
+    state.voice.screenSenders = {};
+    updateVoiceScreensVisibility();
 }
 
 function createPeerConnection(remoteUserId, shouldCreateOffer) {
@@ -759,6 +1373,11 @@ function createPeerConnection(remoteUserId, shouldCreateOffer) {
         });
     }
 
+    if (state.voice.screenTrack && state.voice.screenStream) {
+        const screenSender = peer.addTrack(state.voice.screenTrack, state.voice.screenStream);
+        state.voice.screenSenders[remoteUserId] = screenSender;
+    }
+
     peer.onicecandidate = (event) => {
         if (!event.candidate) return;
         wsSend({
@@ -771,6 +1390,10 @@ function createPeerConnection(remoteUserId, shouldCreateOffer) {
     };
 
     peer.ontrack = (event) => {
+        const remoteStream = event.streams[0];
+        if (!remoteStream) return;
+        state.voice.remoteStreams[remoteUserId] = remoteStream;
+
         let audioEl = state.voice.audioEls[remoteUserId];
         if (!audioEl) {
             audioEl = document.createElement("audio");
@@ -779,10 +1402,20 @@ function createPeerConnection(remoteUserId, shouldCreateOffer) {
             document.body.appendChild(audioEl);
             state.voice.audioEls[remoteUserId] = audioEl;
         }
-        audioEl.srcObject = event.streams[0];
+        audioEl.srcObject = remoteStream;
         audioEl.muted = state.voice.deafened;
         audioEl.play().catch(() => {
             // autoplay can be blocked until interaction
+        });
+
+        syncRemoteScreenTile(remoteUserId, remoteStream);
+        remoteStream.onremovetrack = () => {
+            syncRemoteScreenTile(remoteUserId, remoteStream);
+        };
+        remoteStream.getVideoTracks().forEach((track) => {
+            track.onended = () => {
+                syncRemoteScreenTile(remoteUserId, remoteStream);
+            };
         });
     };
 
@@ -830,6 +1463,131 @@ async function handleVoiceSignal(msg) {
     }
 }
 
+async function renegotiatePeer(remoteUserId) {
+    const peer = state.voice.peers[remoteUserId];
+    if (!peer || !state.voice.joinedRoomId) return;
+
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    wsSend({
+        type: "voice_signal",
+        room_id: state.voice.joinedRoomId,
+        user_id: state.userId,
+        target_user_id: remoteUserId,
+        sdp: peer.localDescription,
+    });
+}
+
+function broadcastVoiceState() {
+    if (!state.voice.joinedRoomId) return;
+    wsSend({
+        type: "voice_state",
+        room_id: state.voice.joinedRoomId,
+        user_id: state.userId,
+        username: state.username,
+        muted: state.voice.muted,
+        deafened: state.voice.deafened,
+        screen_sharing: state.voice.screenSharing,
+    });
+}
+
+async function startScreenShare() {
+    if (!state.voice.joinedRoomId) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        alert("Le partage d'écran n'est pas supporté sur cet appareil.");
+        return;
+    }
+    if (state.voice.screenTrack) return;
+
+    try {
+        updateScreenShareSettingsFromUI();
+        const displayStream = await navigator.mediaDevices.getDisplayMedia(getScreenCaptureConstraints());
+        const screenTrack = displayStream.getVideoTracks()[0];
+        if (!screenTrack) return;
+
+        await applyScreenTrackConstraints(screenTrack);
+
+        state.voice.screenStream = displayStream;
+        state.voice.screenTrack = screenTrack;
+        state.voice.screenSharing = true;
+
+        syncRemoteScreenTile(state.userId, displayStream);
+
+        screenTrack.onended = () => {
+            stopScreenShare(true).catch((err) => console.error("Screen stop error", err));
+        };
+
+        Object.entries(state.voice.peers).forEach(([remoteUserId, peer]) => {
+            const sender = peer.addTrack(screenTrack, displayStream);
+            state.voice.screenSenders[remoteUserId] = sender;
+        });
+
+        await Promise.all(
+            Object.keys(state.voice.peers).map((remoteUserId) =>
+                renegotiatePeer(remoteUserId).catch((err) => {
+                    console.error("Renegotiation error", err);
+                })
+            )
+        );
+
+        ensureVoiceMember(state.userId, state.username);
+        state.voice.members[state.userId].screenSharing = true;
+        renderVoiceMembers();
+        updateVoiceButtons();
+        broadcastVoiceState();
+    } catch (err) {
+        console.error(err);
+        alert("Impossible de démarrer le partage d'écran.");
+    }
+}
+
+async function stopScreenShare(shouldBroadcast = true, shouldRenegotiate = true) {
+    if (!state.voice.screenTrack && !state.voice.screenStream && !state.voice.screenSharing) return;
+
+    Object.entries(state.voice.peers).forEach(([remoteUserId, peer]) => {
+        const explicitSender = state.voice.screenSenders[remoteUserId];
+        const sender = explicitSender || peer.getSenders().find((s) => s.track && s.track.kind === "video");
+        if (sender) {
+            try {
+                peer.removeTrack(sender);
+            } catch (err) {
+                console.error("removeTrack error", err);
+            }
+        }
+        delete state.voice.screenSenders[remoteUserId];
+    });
+
+    if (state.voice.screenStream) {
+        state.voice.screenStream.getTracks().forEach((track) => track.stop());
+    } else if (state.voice.screenTrack) {
+        state.voice.screenTrack.stop();
+    }
+
+    state.voice.screenStream = null;
+    state.voice.screenTrack = null;
+    state.voice.screenSharing = false;
+    removeRemoteScreenTile(state.userId);
+
+    ensureVoiceMember(state.userId, state.username);
+    state.voice.members[state.userId].screenSharing = false;
+    renderVoiceMembers();
+    updateVoiceButtons();
+
+    if (shouldRenegotiate) {
+        await Promise.all(
+            Object.keys(state.voice.peers).map((remoteUserId) =>
+                renegotiatePeer(remoteUserId).catch((err) => {
+                    console.error("Renegotiation error", err);
+                })
+            )
+        );
+    }
+
+    if (shouldBroadcast) {
+        broadcastVoiceState();
+    }
+}
+
 function handleVoiceWsEvent(msg) {
     if (!msg.room_id) return;
 
@@ -838,6 +1596,7 @@ function handleVoiceWsEvent(msg) {
         ensureVoiceMember(msg.user_id, msg.username);
         state.voice.members[msg.user_id].muted = !!msg.muted;
         state.voice.members[msg.user_id].deafened = !!msg.deafened;
+        state.voice.members[msg.user_id].screenSharing = !!msg.screen_sharing;
         renderVoiceMembers();
 
         if (
@@ -863,6 +1622,12 @@ function handleVoiceWsEvent(msg) {
         ensureVoiceMember(msg.user_id, msg.username);
         state.voice.members[msg.user_id].muted = !!msg.muted;
         state.voice.members[msg.user_id].deafened = !!msg.deafened;
+        state.voice.members[msg.user_id].screenSharing = !!msg.screen_sharing;
+        if (!msg.screen_sharing) {
+            removeRemoteScreenTile(msg.user_id);
+        } else if (state.voice.remoteStreams[msg.user_id]) {
+            syncRemoteScreenTile(msg.user_id, state.voice.remoteStreams[msg.user_id]);
+        }
         renderVoiceMembers();
         return;
     }
@@ -889,6 +1654,7 @@ async function joinVoiceRoom() {
         ensureVoiceMember(state.userId, state.username);
         state.voice.members[state.userId].muted = state.voice.muted;
         state.voice.members[state.userId].deafened = state.voice.deafened;
+        state.voice.members[state.userId].screenSharing = state.voice.screenSharing;
 
         applyLocalTrackState();
         startMicMeter(stream);
@@ -903,6 +1669,7 @@ async function joinVoiceRoom() {
             username: state.username,
             muted: state.voice.muted,
             deafened: state.voice.deafened,
+            screen_sharing: state.voice.screenSharing,
         });
     } catch (err) {
         alert("Impossible d'accéder au micro.");
@@ -912,6 +1679,8 @@ async function joinVoiceRoom() {
 
 function leaveVoiceRoom() {
     if (!state.voice.joinedRoomId) return;
+
+    stopScreenShare(false, false).catch((err) => console.error("Screen stop error", err));
 
     wsSend({
         type: "voice_leave",
@@ -944,14 +1713,7 @@ function toggleVoiceMute() {
     updateVoiceButtons();
     updateVoiceQuickStatus();
 
-    wsSend({
-        type: "voice_state",
-        room_id: state.voice.joinedRoomId,
-        user_id: state.userId,
-        username: state.username,
-        muted: state.voice.muted,
-        deafened: state.voice.deafened,
-    });
+    broadcastVoiceState();
 }
 
 function toggleVoiceDeafen() {
@@ -969,14 +1731,16 @@ function toggleVoiceDeafen() {
     updateVoiceButtons();
     updateVoiceQuickStatus();
 
-    wsSend({
-        type: "voice_state",
-        room_id: state.voice.joinedRoomId,
-        user_id: state.userId,
-        username: state.username,
-        muted: state.voice.muted,
-        deafened: state.voice.deafened,
-    });
+    broadcastVoiceState();
+}
+
+function toggleVoiceScreenShare() {
+    if (!state.voice.joinedRoomId) return;
+    if (state.voice.screenSharing) {
+        stopScreenShare(true).catch((err) => console.error("Screen stop error", err));
+    } else {
+        startScreenShare().catch((err) => console.error("Screen start error", err));
+    }
 }
 
 function renderMembers() {
@@ -986,6 +1750,7 @@ function renderMembers() {
 
     entries.forEach(([uid, u]) => {
         const li = document.createElement("li");
+        const status = normalizePresence(u.status || "online");
         const avatarContent = u.avatar_url
             ? `<img src="${API}${u.avatar_url}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
             : u.username[0].toUpperCase();
@@ -994,9 +1759,12 @@ function renderMembers() {
                 <div class="avatar avatar-bg-${u.avatar_color % 8}">
                     ${avatarContent}
                 </div>
-                <div class="status-dot online"></div>
+                <div class="status-dot ${presenceDotClass(status)}"></div>
             </div>
-            <div class="name">${escapeHtml(u.username)}</div>
+            <div class="member-meta">
+                <div class="name">${escapeHtml(u.username)}</div>
+                <div class="member-status-label">${presenceLabel(status)}</div>
+            </div>
         `;
         li.addEventListener("contextmenu", (e) => showContextMenu(e, "user", uid, u.username));
         li.addEventListener("click", (e) => showUserPopout(e, uid, u));
@@ -1004,17 +1772,136 @@ function renderMembers() {
     });
 }
 
+function escapeRegExp(value) {
+    return (value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function messageMentionsCurrentUser(content) {
+    if (!content || !state.username) return false;
+    const usernamePattern = escapeRegExp(state.username);
+    const mentionRegex = new RegExp(`(^|\\s)@${usernamePattern}(?=\\b|\\s|$)`, "i");
+    return mentionRegex.test(content);
+}
+
+function renderMessageContentHtml(content) {
+    const escaped = escapeHtml(content || "");
+    return escaped.replace(/(^|\s)(@[\w-]{2,32})/g, (match, prefix, tag) => {
+        const selfTag = `@${state.username || ""}`;
+        const isSelf = selfTag.length > 1 && tag.toLowerCase() === selfTag.toLowerCase();
+        const cls = isSelf ? "mention-token is-self" : "mention-token";
+        return `${prefix}<span class="${cls}">${tag}</span>`;
+    });
+}
+
+function setReplyTarget(target) {
+    if (!target || !target.id) return;
+    state.replyingTo = {
+        id: target.id,
+        username: target.username || "Utilisateur",
+        snippet: target.snippet || "Message",
+    };
+    if (replyTargetName) replyTargetName.textContent = state.replyingTo.username;
+    if (replyTargetSnippet) replyTargetSnippet.textContent = state.replyingTo.snippet;
+    replyPreview?.classList.remove("hidden");
+    messageInput?.focus();
+}
+
+function clearReplyTarget() {
+    state.replyingTo = null;
+    if (replyTargetName) replyTargetName.textContent = "Utilisateur";
+    if (replyTargetSnippet) replyTargetSnippet.textContent = "";
+    replyPreview?.classList.add("hidden");
+}
+
+function hideThreadPanel() {
+    state.threadRootId = null;
+    threadPanel?.classList.add("hidden");
+    chatArea?.classList.remove("thread-open");
+    if (threadRoot) threadRoot.innerHTML = "";
+    if (threadReplies) threadReplies.innerHTML = "";
+    if (threadInput) threadInput.value = "";
+}
+
+function renderThreadPanel() {
+    if (!state.threadRootId || !threadPanel) return;
+    const rootMsg = state.messageMetaById[state.threadRootId];
+    if (!rootMsg) {
+        hideThreadPanel();
+        return;
+    }
+
+    threadPanel.classList.remove("hidden");
+    chatArea?.classList.add("thread-open");
+
+    const rootText = (rootMsg.content && rootMsg.content.trim()) || (rootMsg.image_url ? "[Image]" : "Message");
+    threadRoot.innerHTML = `
+        <div class="thread-item">
+            <div class="thread-item-user">${escapeHtml(rootMsg.username || "Utilisateur")}</div>
+            <div class="thread-item-content">${escapeHtml(rootText)}</div>
+        </div>
+    `;
+
+    const replies = Object.values(state.messageMetaById)
+        .filter((m) => m.reply_to_id === state.threadRootId)
+        .sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""));
+
+    if (!replies.length) {
+        threadReplies.innerHTML = `<div class="thread-item"><div class="thread-item-content">Aucune réponse pour l’instant.</div></div>`;
+        return;
+    }
+
+    threadReplies.innerHTML = "";
+    replies.forEach((reply) => {
+        const content = (reply.content && reply.content.trim()) || (reply.image_url ? "[Image]" : "Message");
+        const row = document.createElement("div");
+        row.className = "thread-item";
+        row.innerHTML = `
+            <div class="thread-item-user">${escapeHtml(reply.username || "Utilisateur")}</div>
+            <div class="thread-item-content">${escapeHtml(content)}</div>
+        `;
+        row.addEventListener("click", () => {
+            const el = messagesContainer.querySelector(`.message[data-id="${reply.id}"]`);
+            if (el) {
+                el.scrollIntoView({ behavior: "smooth", block: "center" });
+                el.classList.add("message-mentioned");
+                setTimeout(() => el.classList.remove("message-mentioned"), 1200);
+            }
+        });
+        threadReplies.appendChild(row);
+    });
+}
+
+function openThreadForMessage(messageId) {
+    if (!messageId) return;
+    state.threadRootId = messageId;
+    renderThreadPanel();
+}
+
 function appendMessage(msg, isFirstInGroup = true) {
     const div = document.createElement("div");
     div.classList.add("message");
     div.setAttribute("data-username", msg.username);
     div.setAttribute("data-id", msg.id);
+    if (msg.user_id) {
+        div.setAttribute("data-user-id", msg.user_id);
+    }
     if (isFirstInGroup) div.classList.add("first-in-group");
 
     div.addEventListener("contextmenu", (e) => showContextMenu(e, "message", msg.id, msg.username));
 
     const colorIndex = hashString(msg.username) % 8;
     const time = formatTime(msg.created_at);
+
+    state.messageMetaById[msg.id] = {
+        id: msg.id,
+        username: msg.username,
+        user_id: msg.user_id,
+        content: msg.content || "",
+        image_url: msg.image_url || null,
+        created_at: msg.created_at || null,
+        reply_to_id: msg.reply_to_id || null,
+        avatar_url: msg.avatar_url || null,
+    };
 
     // Build message actions bar
     const actionsHtml = `
@@ -1027,12 +1914,26 @@ function appendMessage(msg, isFirstInGroup = true) {
                     <line x1="15" y1="9" x2="15.01" y2="9"></line>
                 </svg>
             </button>
-            <button class="msg-action-btn" title="Répondre">
+            <button class="msg-action-btn reply" title="Répondre">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="9 17 4 12 9 7"></polyline>
                     <path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>
                 </svg>
             </button>
+            <button class="msg-action-btn thread" title="Ouvrir le thread">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                </svg>
+            </button>
+            ${(state.role === "admin") ? `
+            <button class="msg-action-btn pin" title="${state.pinnedMessageIds.has(msg.id) || msg.pinned_at ? "Désépingler" : "Épingler"}">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 17v5"></path>
+                    <path d="M5 7h14"></path>
+                    <path d="M8 7V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v3"></path>
+                    <path d="M6 7l2 8h8l2-8"></path>
+                </svg>
+            </button>` : ''}
             ${(state.role === "admin" || msg.username === state.username) ? `
             <button class="msg-action-btn danger" title="Supprimer" onclick="deleteMessageFromBtn('${msg.id}')">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1052,7 +1953,32 @@ function appendMessage(msg, isFirstInGroup = true) {
 
     // Detect emoji-only messages for jumbo display
     const emojiClass = msg.content ? getEmojiClass(msg.content) : '';
-    const contentHtml = msg.content ? `<div class="message-content${emojiClass ? ' ' + emojiClass : ''}">${escapeHtml(msg.content)}</div>` : '';
+    const mentionsMe = msg.username !== state.username && messageMentionsCurrentUser(msg.content || "");
+    if (mentionsMe) {
+        div.classList.add("message-mentioned");
+    }
+    const contentHtml = msg.content
+        ? `<div class="message-content${emojiClass ? ' ' + emojiClass : ''}">${renderMessageContentHtml(msg.content)}</div>`
+        : '';
+
+    const pinnedFlagHtml = msg.pinned_at ? `<div class="message-pinned-flag">📌 Message épinglé</div>` : "";
+
+    let replyRefHtml = "";
+    if (msg.reply_to_id) {
+        const parent = state.messageMetaById[msg.reply_to_id];
+        const parentName = parent?.username || "Message";
+        const parentSnippet = parent
+            ? ((parent.content && parent.content.trim()) || (parent.image_url ? "[Image]" : "Message"))
+            : "Message introuvable";
+
+        replyRefHtml = `
+            <div class="message-reply-ref" data-reply-target="${escapeHtml(msg.reply_to_id)}" title="Aller au message d'origine">
+                <span>↪</span>
+                <span class="message-reply-user">${escapeHtml(parentName)}</span>
+                <span class="message-reply-snippet">${escapeHtml(parentSnippet)}</span>
+            </div>
+        `;
+    }
 
     // Avatar content — show profile image if available
     const avatarContent = msg.avatar_url
@@ -1068,6 +1994,8 @@ function appendMessage(msg, isFirstInGroup = true) {
                     <span class="message-username name-color-${colorIndex}">${escapeHtml(msg.username)}</span>
                     <span class="message-time">${time}</span>
                 </div>
+                ${pinnedFlagHtml}
+                ${replyRefHtml}
                 ${contentHtml}
                 ${imageHtml}
             </div>
@@ -1077,10 +2005,73 @@ function appendMessage(msg, isFirstInGroup = true) {
             ${actionsHtml}
             <div class="message-avatar placeholder"></div>
             <div class="message-body">
+                ${pinnedFlagHtml}
+                ${replyRefHtml}
                 ${contentHtml}
                 ${imageHtml}
             </div>
         `;
+    }
+
+    const replyBtn = div.querySelector(".msg-action-btn.reply");
+    if (replyBtn) {
+        replyBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const previewSnippet = (msg.content && msg.content.trim()) || (msg.image_url ? "[Image]" : "Message");
+            setReplyTarget({
+                id: msg.id,
+                username: msg.username,
+                snippet: previewSnippet,
+            });
+        });
+    }
+
+    const threadBtn = div.querySelector(".msg-action-btn.thread");
+    if (threadBtn) {
+        threadBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openThreadForMessage(msg.id);
+        });
+    }
+
+    const pinBtn = div.querySelector(".msg-action-btn.pin");
+    if (pinBtn) {
+        pinBtn.addEventListener("click", async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!state.currentRoomId || state.currentRoomKind !== "text") return;
+
+            const alreadyPinned = state.pinnedMessageIds.has(msg.id) || !!msg.pinned_at;
+            try {
+                const res = await fetch(`${API}/api/messages/${msg.id}/pin`, {
+                    method: alreadyPinned ? "DELETE" : "POST",
+                    headers: { Authorization: `Bearer ${state.token}` }
+                });
+                if (!res.ok) {
+                    const data = await res.json();
+                    alert(data.error || "Erreur");
+                }
+            } catch (e) {
+                alert("Erreur réseau");
+            }
+        });
+    }
+
+    const replyRef = div.querySelector(".message-reply-ref");
+    if (replyRef) {
+        replyRef.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const targetId = replyRef.getAttribute("data-reply-target");
+            if (!targetId) return;
+            const targetEl = messagesContainer.querySelector(`.message[data-id="${targetId}"]`);
+            if (!targetEl) return;
+            targetEl.scrollIntoView({ behavior: "smooth", block: "center" });
+            targetEl.classList.add("message-mentioned");
+            setTimeout(() => targetEl.classList.remove("message-mentioned"), 1200);
+        });
     }
 
     messagesContainer.appendChild(div);
@@ -1176,13 +2167,120 @@ messageForm.addEventListener("submit", async (e) => {
         content: content || "",
         avatar_color: state.avatarColor
     };
+    if (state.replyingTo?.id) {
+        msg.reply_to_id = state.replyingTo.id;
+    }
     if (imageUrl) msg.image_url = imageUrl;
 
     state.ws.send(JSON.stringify(msg));
     messageInput.value = "";
     fileInput.value = "";
     uploadPreview.classList.add("hidden");
+    clearReplyTarget();
 });
+
+if (replyCancelBtn) {
+    replyCancelBtn.addEventListener("click", () => {
+        clearReplyTarget();
+    });
+}
+
+async function loadPinnedMessages() {
+    if (!state.currentRoomId || state.currentRoomKind !== "text") return;
+    try {
+        const res = await fetch(`${API}/api/rooms/${state.currentRoomId}/pins`, {
+            headers: { Authorization: `Bearer ${state.token}` }
+        });
+        if (!res.ok) {
+            pinnedList.innerHTML = `<div class="pinned-item">Impossible de charger les messages épinglés.</div>`;
+            return;
+        }
+
+        const items = await res.json();
+        if (!items.length) {
+            pinnedList.innerHTML = `<div class="pinned-item">Aucun message épinglé dans ce salon.</div>`;
+            return;
+        }
+
+        pinnedList.innerHTML = "";
+        items.forEach((item) => {
+            const row = document.createElement("div");
+            row.className = "pinned-item";
+            row.innerHTML = `
+                <div class="pinned-item-header">
+                    <span class="pinned-item-user">${escapeHtml(item.username || "Utilisateur")}</span>
+                    <span class="pinned-item-time">${escapeHtml(formatTime(item.created_at))}</span>
+                </div>
+                <div class="pinned-item-content">${escapeHtml((item.content && item.content.trim()) || (item.image_url ? "[Image]" : "Message"))}</div>
+            `;
+            row.addEventListener("click", () => {
+                pinnedModal.classList.add("hidden");
+                const target = messagesContainer.querySelector(`.message[data-id="${item.id}"]`);
+                if (target) {
+                    target.scrollIntoView({ behavior: "smooth", block: "center" });
+                    target.classList.add("message-mentioned");
+                    setTimeout(() => target.classList.remove("message-mentioned"), 1200);
+                }
+            });
+            pinnedList.appendChild(row);
+        });
+    } catch (err) {
+        pinnedList.innerHTML = `<div class="pinned-item">Erreur réseau.</div>`;
+    }
+}
+
+if (pinnedBtn) {
+    pinnedBtn.addEventListener("click", async () => {
+        if (state.currentRoomKind !== "text") {
+            alert("Les épinglés sont disponibles dans les salons textuels.");
+            return;
+        }
+        pinnedModal.classList.remove("hidden");
+        await loadPinnedMessages();
+    });
+}
+
+if (pinnedCloseBtn) {
+    pinnedCloseBtn.addEventListener("click", () => {
+        pinnedModal.classList.add("hidden");
+    });
+}
+
+if (pinnedModal) {
+    pinnedModal.addEventListener("click", (event) => {
+        if (event.target === pinnedModal) {
+            pinnedModal.classList.add("hidden");
+        }
+    });
+}
+
+if (threadCloseBtn) {
+    threadCloseBtn.addEventListener("click", () => {
+        hideThreadPanel();
+    });
+}
+
+if (threadForm) {
+    threadForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const content = threadInput?.value?.trim() || "";
+        if (!content || !state.threadRootId || state.currentRoomKind !== "text") return;
+        if (!state.currentRoomId || !state.ws) return;
+
+        const msg = {
+            type: "message",
+            room_id: state.currentRoomId,
+            user_id: state.userId,
+            username: state.username,
+            content,
+            avatar_color: state.avatarColor,
+            reply_to_id: state.threadRootId,
+        };
+
+        state.ws.send(JSON.stringify(msg));
+        threadInput.value = "";
+    });
+}
 
 // ── Typing Indicator ───────────────────────────────────
 let typingTimeout = null;
@@ -1251,6 +2349,36 @@ voiceDeafenBtn.addEventListener("click", () => {
     toggleVoiceDeafen();
 });
 
+voiceScreenBtn.addEventListener("click", () => {
+    toggleVoiceScreenShare();
+});
+
+if (voiceScreenQualitySelect) {
+    voiceScreenQualitySelect.addEventListener("change", () => {
+        updateScreenShareSettingsFromUI();
+        if (state.voice.screenSharing && state.voice.screenStream) {
+            syncRemoteScreenTile(state.userId, state.voice.screenStream);
+        }
+        if (state.voice.screenSharing && state.voice.screenTrack) {
+            applyScreenTrackConstraints(state.voice.screenTrack);
+        }
+    });
+}
+
+if (voiceScreenFpsSelect) {
+    voiceScreenFpsSelect.addEventListener("change", () => {
+        updateScreenShareSettingsFromUI();
+        if (state.voice.screenSharing && state.voice.screenStream) {
+            syncRemoteScreenTile(state.userId, state.voice.screenStream);
+        }
+        if (state.voice.screenSharing && state.voice.screenTrack) {
+            applyScreenTrackConstraints(state.voice.screenTrack);
+        }
+    });
+}
+
+syncScreenShareSettingsUI();
+
 muteBtn.addEventListener("click", () => {
     toggleVoiceMute();
 });
@@ -1258,6 +2386,20 @@ muteBtn.addEventListener("click", () => {
 deafenBtn.addEventListener("click", () => {
     toggleVoiceDeafen();
 });
+
+if (presenceSelect) {
+    presenceSelect.addEventListener("change", () => {
+        applyOwnPresenceState(presenceSelect.value, true);
+    });
+}
+
+if (selfStatusDot) {
+    selfStatusDot.title = "Cliquer pour changer le statut";
+    selfStatusDot.addEventListener("click", (event) => {
+        event.stopPropagation();
+        cycleOwnPresence();
+    });
+}
 
 // ── Chat Search (client-side filter) ───────────────────
 chatSearch.addEventListener("input", () => {
@@ -1276,18 +2418,281 @@ chatSearch.addEventListener("input", () => {
 
 // ═══ Settings Logic ════════════════════════════════════
 
+function switchSettingsSection(sectionName) {
+    document.querySelectorAll(".settings-nav-item").forEach((tab) => {
+        tab.classList.toggle("active", tab.dataset.section === sectionName);
+    });
+
+    document.querySelectorAll(".settings-section").forEach((section) => {
+        section.classList.remove("active");
+    });
+
+    const target = document.getElementById(`section-${sectionName}`);
+    if (target) {
+        target.classList.add("active");
+    }
+
+    if (settingsContentInner) {
+        settingsContentInner.scrollTop = 0;
+    }
+}
+
+function filterSettingsNav(query) {
+    const normalized = (query || "").trim().toLowerCase();
+    document.querySelectorAll(".settings-nav-item").forEach((item) => {
+        const label = item.textContent.toLowerCase();
+        if (!normalized || label.includes(normalized) || item.classList.contains("danger")) {
+            item.style.display = "";
+        } else {
+            item.style.display = "none";
+        }
+    });
+}
+
+function setServerSettingsFeedback(message, isError = false) {
+    if (!serverSettingsFeedback) return;
+    serverSettingsFeedback.textContent = message || "";
+    serverSettingsFeedback.style.color = isError ? "var(--red)" : "var(--green)";
+}
+
+function renderServerRoles() {
+    if (!serverRolesList || !serverRoleSelect) return;
+
+    const roles = Array.isArray(state.serverRoles) ? state.serverRoles : [];
+
+    serverRolesList.innerHTML = "";
+    if (roles.length === 0) {
+        serverRolesList.innerHTML = `<div class="server-role-item"><span class="server-role-name">Aucun rôle.</span></div>`;
+    } else {
+        roles.forEach((role) => {
+            const row = document.createElement("div");
+            row.className = "server-role-item";
+
+            const canDelete = role.name !== "admin" && role.name !== "user";
+            row.innerHTML = `
+                <div class="server-role-left">
+                    <span class="server-role-dot" style="background:${escapeHtml(role.color || "#99aab5")}"></span>
+                    <span class="server-role-name">${escapeHtml(role.name)}</span>
+                </div>
+                <button class="server-role-delete" data-role="${escapeHtml(role.name)}" ${canDelete ? "" : "disabled"}>Suppr.</button>
+            `;
+
+            const delBtn = row.querySelector(".server-role-delete");
+            if (delBtn && canDelete) {
+                delBtn.addEventListener("click", async () => {
+                    if (!confirm(`Supprimer le rôle \"${role.name}\" ?`)) return;
+                    try {
+                        const res = await fetch(`${API}/api/server/roles/${encodeURIComponent(role.name)}`, {
+                            method: "DELETE",
+                            headers: { Authorization: `Bearer ${state.token}` }
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) {
+                            setServerSettingsFeedback(data.error || "Erreur", true);
+                            return;
+                        }
+                        await loadServerSettingsData();
+                        setServerSettingsFeedback("Rôle supprimé.");
+                    } catch (err) {
+                        setServerSettingsFeedback("Erreur réseau.", true);
+                    }
+                });
+            }
+
+            serverRolesList.appendChild(row);
+        });
+    }
+
+    const currentSelected = serverRoleSelect.value;
+    serverRoleSelect.innerHTML = "";
+    roles.forEach((role) => {
+        const opt = document.createElement("option");
+        opt.value = role.name;
+        opt.textContent = role.name;
+        serverRoleSelect.appendChild(opt);
+    });
+    if (roles.some((r) => r.name === currentSelected)) {
+        serverRoleSelect.value = currentSelected;
+    }
+}
+
+function renderServerUsers() {
+    if (!serverUserSelect) return;
+    const users = Array.isArray(state.serverUsers) ? state.serverUsers : [];
+    const currentSelected = serverUserSelect.value;
+
+    serverUserSelect.innerHTML = "";
+    users.forEach((user) => {
+        const opt = document.createElement("option");
+        opt.value = user.id;
+        opt.textContent = `${user.username} (${user.role})`;
+        serverUserSelect.appendChild(opt);
+    });
+
+    if (users.some((u) => u.id === currentSelected)) {
+        serverUserSelect.value = currentSelected;
+    }
+}
+
+async function loadServerSettingsData() {
+    const [rolesRes, usersRes] = await Promise.all([
+        fetch(`${API}/api/server/roles`, { headers: { Authorization: `Bearer ${state.token}` } }),
+        fetch(`${API}/api/server/users`, { headers: { Authorization: `Bearer ${state.token}` } }),
+    ]);
+
+    const rolesData = await rolesRes.json().catch(() => []);
+    const usersData = await usersRes.json().catch(() => []);
+
+    if (!rolesRes.ok) {
+        throw new Error(rolesData.error || "Impossible de charger les rôles");
+    }
+    if (!usersRes.ok) {
+        throw new Error(usersData.error || "Impossible de charger les membres");
+    }
+
+    state.serverRoles = Array.isArray(rolesData) ? rolesData : [];
+    state.serverUsers = Array.isArray(usersData) ? usersData : [];
+    renderServerRoles();
+    renderServerUsers();
+}
+
+async function openServerSettingsModal() {
+    if (!serverSettingsModal || state.role !== "admin") return;
+    setServerSettingsFeedback("Chargement...");
+    serverSettingsModal.classList.remove("hidden");
+    try {
+        await loadServerSettingsData();
+        setServerSettingsFeedback("");
+    } catch (err) {
+        setServerSettingsFeedback(err.message || "Erreur de chargement", true);
+    }
+}
+
+function closeServerSettingsModal() {
+    if (!serverSettingsModal) return;
+    serverSettingsModal.classList.add("hidden");
+    setServerSettingsFeedback("");
+}
+
 // Open settings
 settingsBtn.addEventListener("click", () => {
     settingsModal.classList.remove("hidden");
+    switchSettingsSection("my-account");
+    if (settingsSearchInput) {
+        settingsSearchInput.value = "";
+        filterSettingsNav("");
+    }
     populateSettingsUI();
 });
 
 // Close settings
 closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
 
+if (serverSettingsBtn) {
+    serverSettingsBtn.addEventListener("click", () => {
+        openServerSettingsModal();
+    });
+}
+
+if (serverSettingsCloseBtn) {
+    serverSettingsCloseBtn.addEventListener("click", () => {
+        closeServerSettingsModal();
+    });
+}
+
+if (serverSettingsModal) {
+    serverSettingsModal.addEventListener("click", (event) => {
+        if (event.target === serverSettingsModal) {
+            closeServerSettingsModal();
+        }
+    });
+}
+
+if (serverRoleForm) {
+    serverRoleForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const name = (serverRoleName?.value || "").trim().toLowerCase();
+        const color = (serverRoleColor?.value || "#99aab5").trim();
+        if (!name) return;
+
+        try {
+            const res = await fetch(`${API}/api/server/roles`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${state.token}`
+                },
+                body: JSON.stringify({ name, color })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setServerSettingsFeedback(data.error || "Erreur", true);
+                return;
+            }
+
+            if (serverRoleName) serverRoleName.value = "";
+            await loadServerSettingsData();
+            setServerSettingsFeedback("Rôle créé.");
+        } catch (err) {
+            setServerSettingsFeedback("Erreur réseau.", true);
+        }
+    });
+}
+
+if (serverAssignBtn) {
+    serverAssignBtn.addEventListener("click", async () => {
+        const userId = serverUserSelect?.value;
+        const role = serverRoleSelect?.value;
+        if (!userId || !role) return;
+
+        try {
+            const res = await fetch(`${API}/api/users/${userId}/role`, {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${state.token}`
+                },
+                body: JSON.stringify({ role })
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setServerSettingsFeedback(data.error || "Erreur", true);
+                return;
+            }
+
+            await loadServerSettingsData();
+            setServerSettingsFeedback("Rôle attribué.");
+        } catch (err) {
+            setServerSettingsFeedback("Erreur réseau.", true);
+        }
+    });
+}
+
+settingsModal.addEventListener("click", (event) => {
+    if (event.target === settingsModal) {
+        settingsModal.classList.add("hidden");
+    }
+});
+
 // Close on ESC
 document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+        if (searchModal && !searchModal.classList.contains("hidden")) {
+            closeSearchModal();
+            return;
+        }
+        if (threadPanel && !threadPanel.classList.contains("hidden")) {
+            hideThreadPanel();
+            return;
+        }
+        if (roomSettingsModal && !roomSettingsModal.classList.contains("hidden")) {
+            closeRoomSettingsModal();
+            return;
+        }
+        if (serverSettingsModal && !serverSettingsModal.classList.contains("hidden")) {
+            closeServerSettingsModal();
+            return;
+        }
         if (!settingsModal.classList.contains("hidden")) {
             settingsModal.classList.add("hidden");
             return;
@@ -1302,19 +2707,36 @@ document.addEventListener("keydown", (e) => {
 // Tab navigation
 document.querySelectorAll(".settings-nav-item[data-section]").forEach(tab => {
     tab.addEventListener("click", () => {
-        // Mark active tab
-        document.querySelectorAll(".settings-nav-item").forEach(t => t.classList.remove("active"));
-        tab.classList.add("active");
-
-        // Show section
-        document.querySelectorAll(".settings-section").forEach(s => s.classList.remove("active"));
-        const target = document.getElementById(`section-${tab.dataset.section}`);
-        if (target) target.classList.add("active");
+        switchSettingsSection(tab.dataset.section);
     });
 });
 
+if (settingsMiniEditBtn) {
+    settingsMiniEditBtn.addEventListener("click", () => {
+        switchSettingsSection("profiles");
+    });
+}
+
+if (settingsSearchInput) {
+    settingsSearchInput.addEventListener("input", () => {
+        filterSettingsNav(settingsSearchInput.value);
+    });
+}
+
 function populateSettingsUI() {
     const disc = `#${(hashString(state.username) % 9000) + 1000}`;
+
+    if (settingsMiniAvatar) {
+        settingsMiniAvatar.className = `settings-mini-avatar avatar-bg-${state.avatarColor % 8}`;
+        if (state.avatarUrl) {
+            settingsMiniAvatar.innerHTML = `<img src="${API}${state.avatarUrl}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`;
+        } else {
+            settingsMiniAvatar.textContent = state.username[0].toUpperCase();
+        }
+    }
+    if (settingsMiniName) {
+        settingsMiniName.textContent = state.username;
+    }
 
     // Mon Compte tab
     settingsAvatar.className = `profile-avatar avatar-bg-${state.avatarColor % 8}`;
@@ -1327,7 +2749,8 @@ function populateSettingsUI() {
     settingsDiscDisplay.textContent = disc;
     acctUsernameDisplay.textContent = state.username;
     settingsRoleBadge.textContent = (state.role || "USER").toUpperCase();
-    $("#settings-banner").style.background = getAvatarBgColor(state.avatarColor);
+    setBannerBackground($("#settings-banner"), state.bannerUrl, state.avatarColor);
+    applyOwnPresenceUI();
 
     // Edit panel hidden
     editPanel.classList.add("hidden");
@@ -1341,7 +2764,7 @@ function populateSettingsUI() {
     } else {
         previewAvatar.textContent = state.username[0].toUpperCase();
     }
-    previewBanner.style.background = getAvatarBgColor(state.avatarColor);
+    setBannerBackground(previewBanner, state.bannerUrl, state.avatarColor);
     previewUsername.textContent = state.username;
     previewDisc.textContent = disc;
     previewAbout.textContent = state.about || "Aucune description.";
@@ -1350,7 +2773,7 @@ function populateSettingsUI() {
         state.avatarColor = i;
         previewAvatar.className = `preview-avatar avatar-bg-${i}`;
         previewAvatar.innerHTML = state.avatarUrl ? `<img src="${API}${state.avatarUrl}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">` : state.username[0].toUpperCase();
-        previewBanner.style.background = getAvatarBgColor(i);
+        setBannerBackground(previewBanner, state.bannerUrl, i);
     });
 
     // Avatar upload buttons
@@ -1364,6 +2787,13 @@ function populateSettingsUI() {
     document.querySelectorAll('input[name="theme"]').forEach(r => {
         r.checked = r.value === savedTheme;
     });
+    colorThemeButtons.forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.themeColor === prefs.themeColor);
+    });
+    const colorThemeBgToggle = $("#color-theme-bg-toggle");
+    if (colorThemeBgToggle) {
+        colorThemeBgToggle.checked = !!prefs.colorThemeBg;
+    }
     const slider = $("#font-size-slider");
     slider.value = prefs.fontSize;
     $("#font-size-display").textContent = prefs.fontSize + "px";
@@ -1376,6 +2806,22 @@ function populateSettingsUI() {
 function getAvatarBgColor(index) {
     const colors = ["#5865f2", "#57f287", "#feb347", "#ed4245", "#e91e63", "#9b59b6", "#1abc9c", "#e67e22"];
     return colors[index % 8];
+}
+
+function toMediaUrl(path) {
+    if (!path) return "";
+    if (/^https?:\/\//i.test(path) || path.startsWith("data:")) return path;
+    return `${API}${path}`;
+}
+
+function setBannerBackground(el, bannerUrl, fallbackColorIndex = 0) {
+    if (!el) return;
+    if (bannerUrl) {
+        const mediaUrl = toMediaUrl(bannerUrl);
+        el.style.background = `center / cover no-repeat url("${mediaUrl}")`;
+    } else {
+        el.style.background = getAvatarBgColor(fallbackColorIndex);
+    }
 }
 
 function renderColorPickerTo(container, selectedIndex, onClick) {
@@ -1491,6 +2937,7 @@ saveProfileBtn.addEventListener("click", async () => {
 
     const body = { avatar_color: newColor, about: newAbout };
     if (state.avatarUrl) body.avatar_url = state.avatarUrl;
+    if (state.bannerUrl) body.banner_url = state.bannerUrl;
 
     try {
         const res = await fetch(`${API}/api/users/me`, {
@@ -1518,7 +2965,308 @@ saveProfileBtn.addEventListener("click", async () => {
     }
 });
 
-// ── Avatar Upload (Profils tab) ────────────────────────
+// ── Avatar / Banner Upload (Profils tab) ───────────────
+const bannerFileInput = $("#banner-file-input");
+const bannerUploadBtn = $("#banner-upload-btn");
+const bannerRemoveBtn = $("#banner-remove-btn");
+const bannerUploadStatus = $("#banner-upload-status");
+const bannerCropModal = $("#banner-crop-modal");
+const bannerCropPreview = $("#banner-crop-preview");
+const bannerCropZoom = $("#banner-crop-zoom");
+const bannerCropX = $("#banner-crop-x");
+const bannerCropY = $("#banner-crop-y");
+const bannerCropCancel = $("#banner-crop-cancel");
+const bannerCropApply = $("#banner-crop-apply");
+
+let bannerCropImage = null;
+let bannerCropImageUrl = "";
+let bannerCropState = { zoom: 1, x: 0, y: 0 };
+let bannerCropDragging = false;
+let bannerCropDragStart = { mouseX: 0, mouseY: 0, x: 0, y: 0 };
+
+function clampValue(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+}
+
+function syncBannerCropInputs() {
+    if (bannerCropZoom) bannerCropZoom.value = String(bannerCropState.zoom);
+    if (bannerCropX) bannerCropX.value = String(bannerCropState.x);
+    if (bannerCropY) bannerCropY.value = String(bannerCropState.y);
+}
+
+function updateBannerCropState(nextState) {
+    bannerCropState = {
+        zoom: clampValue(nextState.zoom ?? bannerCropState.zoom, 1, 3),
+        x: clampValue(nextState.x ?? bannerCropState.x, -1, 1),
+        y: clampValue(nextState.y ?? bannerCropState.y, -1, 1)
+    };
+
+    syncBannerCropInputs();
+    refreshBannerCropPreview();
+}
+
+function computeBannerCropTransform(targetW, targetH) {
+    if (!bannerCropImage) {
+        return { drawX: 0, drawY: 0, drawW: targetW, drawH: targetH };
+    }
+
+    const iw = bannerCropImage.width;
+    const ih = bannerCropImage.height;
+    const baseScale = Math.max(targetW / iw, targetH / ih);
+    const scale = baseScale * bannerCropState.zoom;
+
+    const drawW = iw * scale;
+    const drawH = ih * scale;
+
+    const overflowX = Math.max(0, drawW - targetW);
+    const overflowY = Math.max(0, drawH - targetH);
+
+    const drawX = (-overflowX / 2) + (bannerCropState.x * overflowX / 2);
+    const drawY = (-overflowY / 2) + (bannerCropState.y * overflowY / 2);
+
+    return { drawX, drawY, drawW, drawH };
+}
+
+function closeBannerCropModal() {
+    if (bannerCropImageUrl) {
+        URL.revokeObjectURL(bannerCropImageUrl);
+        bannerCropImageUrl = "";
+    }
+    bannerCropImage = null;
+    if (bannerCropPreview) {
+        bannerCropPreview.style.backgroundImage = "";
+        bannerCropPreview.style.backgroundSize = "cover";
+        bannerCropPreview.style.backgroundPosition = "center center";
+    }
+    if (bannerCropModal) {
+        bannerCropModal.classList.add("hidden");
+    }
+    bannerCropDragging = false;
+    bannerCropPreview?.classList.remove("dragging");
+}
+
+function refreshBannerCropPreview() {
+    if (!bannerCropPreview || !bannerCropImageUrl) return;
+    const previewW = Math.max(1, bannerCropPreview.clientWidth);
+    const previewH = Math.max(1, bannerCropPreview.clientHeight);
+    const { drawX, drawY, drawW, drawH } = computeBannerCropTransform(previewW, previewH);
+
+    bannerCropPreview.style.backgroundImage = `url("${bannerCropImageUrl}")`;
+    bannerCropPreview.style.backgroundSize = `${drawW}px ${drawH}px`;
+    bannerCropPreview.style.backgroundPosition = `${drawX}px ${drawY}px`;
+}
+
+async function openBannerCropModal(file) {
+    if (!bannerCropModal || !bannerCropPreview) return;
+
+    bannerCropImageUrl = URL.createObjectURL(file);
+    bannerCropImage = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = reject;
+        img.src = bannerCropImageUrl;
+    });
+
+    updateBannerCropState({ zoom: 1, x: 0, y: 0 });
+    bannerCropModal.classList.remove("hidden");
+}
+
+async function exportBannerCroppedBlob() {
+    if (!bannerCropImage) throw new Error("No crop image");
+
+    const outW = 1200;
+    const outH = 400;
+    const canvas = document.createElement("canvas");
+    canvas.width = outW;
+    canvas.height = outH;
+    const ctx = canvas.getContext("2d");
+
+    const { drawX, drawY, drawW, drawH } = computeBannerCropTransform(outW, outH);
+
+    ctx.drawImage(bannerCropImage, drawX, drawY, drawW, drawH);
+
+    return await new Promise((resolve) => {
+        canvas.toBlob((blob) => resolve(blob), "image/webp", 0.92);
+    });
+}
+
+async function uploadAndSaveBanner(blob) {
+    if (!blob) throw new Error("Invalid banner blob");
+
+    const formData = new FormData();
+    formData.append("file", new File([blob], "banner.webp", { type: "image/webp" }));
+
+    const uploadRes = await fetch(`${API}/api/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${state.token}` },
+        body: formData
+    });
+
+    if (!uploadRes.ok) {
+        const data = await uploadRes.json();
+        throw new Error(data.error || "Erreur d'upload");
+    }
+
+    const uploadData = await uploadRes.json();
+    const bannerUrl = uploadData.url;
+
+    const saveRes = await fetch(`${API}/api/users/me`, {
+        method: "PATCH",
+        headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${state.token}`
+        },
+        body: JSON.stringify({ banner_url: bannerUrl })
+    });
+
+    if (!saveRes.ok) {
+        throw new Error("Erreur lors de la sauvegarde");
+    }
+
+    state.bannerUrl = bannerUrl;
+    if (bannerRemoveBtn) bannerRemoveBtn.style.display = "inline-flex";
+    if (bannerUploadStatus) bannerUploadStatus.textContent = "✓ Bannière mise à jour !";
+    populateSettingsUI();
+    connectWebSocket();
+}
+
+if (bannerUploadBtn) {
+    bannerUploadBtn.addEventListener("click", () => bannerFileInput.click());
+}
+
+if (bannerFileInput) {
+    bannerFileInput.addEventListener("change", async () => {
+        const file = bannerFileInput.files?.[0];
+        if (!file) return;
+
+        if (bannerUploadStatus) bannerUploadStatus.textContent = "Préparation du recadrage...";
+        try {
+            await openBannerCropModal(file);
+            if (bannerUploadStatus) bannerUploadStatus.textContent = "";
+        } catch (err) {
+            if (bannerUploadStatus) bannerUploadStatus.textContent = "Image invalide";
+            closeBannerCropModal();
+        }
+
+        bannerFileInput.value = "";
+    });
+}
+
+if (bannerCropZoom) {
+    bannerCropZoom.addEventListener("input", (e) => {
+        updateBannerCropState({ zoom: parseFloat(e.target.value || "1") });
+    });
+}
+
+if (bannerCropX) {
+    bannerCropX.addEventListener("input", (e) => {
+        updateBannerCropState({ x: parseFloat(e.target.value || "0") });
+    });
+}
+
+if (bannerCropY) {
+    bannerCropY.addEventListener("input", (e) => {
+        updateBannerCropState({ y: parseFloat(e.target.value || "0") });
+    });
+}
+
+if (bannerCropPreview) {
+    bannerCropPreview.addEventListener("mousedown", (event) => {
+        if (!bannerCropImageUrl) return;
+        bannerCropDragging = true;
+        bannerCropDragStart = {
+            mouseX: event.clientX,
+            mouseY: event.clientY,
+            x: bannerCropState.x,
+            y: bannerCropState.y
+        };
+        bannerCropPreview.classList.add("dragging");
+        event.preventDefault();
+    });
+
+    bannerCropPreview.addEventListener("wheel", (event) => {
+        if (!bannerCropImageUrl) return;
+        event.preventDefault();
+        const direction = event.deltaY < 0 ? 1 : -1;
+        const nextZoom = bannerCropState.zoom + (direction * 0.08);
+        updateBannerCropState({ zoom: nextZoom });
+    }, { passive: false });
+}
+
+window.addEventListener("mousemove", (event) => {
+    if (!bannerCropDragging || !bannerCropPreview) return;
+
+    const width = Math.max(1, bannerCropPreview.clientWidth);
+    const height = Math.max(1, bannerCropPreview.clientHeight);
+    const deltaX = (event.clientX - bannerCropDragStart.mouseX) * (2 / width);
+    const deltaY = (event.clientY - bannerCropDragStart.mouseY) * (2 / height);
+
+    updateBannerCropState({
+        x: bannerCropDragStart.x - deltaX,
+        y: bannerCropDragStart.y - deltaY
+    });
+});
+
+window.addEventListener("mouseup", () => {
+    if (!bannerCropDragging) return;
+    bannerCropDragging = false;
+    bannerCropPreview?.classList.remove("dragging");
+});
+
+if (bannerCropCancel) {
+    bannerCropCancel.addEventListener("click", () => {
+        if (bannerUploadStatus) bannerUploadStatus.textContent = "Recadrage annulé";
+        closeBannerCropModal();
+    });
+}
+
+if (bannerCropApply) {
+    bannerCropApply.addEventListener("click", async () => {
+        if (bannerUploadStatus) bannerUploadStatus.textContent = "Upload de la bannière...";
+        try {
+            const blob = await exportBannerCroppedBlob();
+            await uploadAndSaveBanner(blob);
+            closeBannerCropModal();
+        } catch (err) {
+            if (bannerUploadStatus) {
+                bannerUploadStatus.textContent = err?.message || "Erreur bannière";
+            }
+        }
+    });
+}
+
+if (bannerCropModal) {
+    bannerCropModal.addEventListener("click", (event) => {
+        if (event.target === bannerCropModal) {
+            closeBannerCropModal();
+        }
+    });
+}
+
+if (bannerRemoveBtn) {
+    bannerRemoveBtn.addEventListener("click", async () => {
+        try {
+            const res = await fetch(`${API}/api/users/me`, {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${state.token}`
+                },
+                body: JSON.stringify({ banner_url: "" })
+            });
+            if (res.ok) {
+                state.bannerUrl = null;
+                bannerRemoveBtn.style.display = "none";
+                if (bannerUploadStatus) bannerUploadStatus.textContent = "✓ Bannière supprimée";
+                populateSettingsUI();
+                connectWebSocket();
+            }
+        } catch (err) {
+            if (bannerUploadStatus) bannerUploadStatus.textContent = "Erreur réseau";
+        }
+    });
+}
+
 const avatarFileInput = $("#avatar-file-input");
 const avatarUploadBtn = $("#avatar-upload-btn");
 const avatarRemoveBtn = $("#avatar-remove-btn");
@@ -1606,6 +3354,24 @@ document.querySelectorAll('input[name="theme"]').forEach(radio => {
     });
 });
 
+colorThemeButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+        const key = btn.dataset.themeColor;
+        if (!COLOR_THEME_PRESETS[key]) return;
+        savePref("themeColor", key);
+        colorThemeButtons.forEach((item) => {
+            item.classList.toggle("active", item === btn);
+        });
+    });
+});
+
+const colorThemeBgToggle = $("#color-theme-bg-toggle");
+if (colorThemeBgToggle) {
+    colorThemeBgToggle.addEventListener("change", (e) => {
+        savePref("colorThemeBg", e.target.checked);
+    });
+}
+
 // Font size slider
 $("#font-size-slider").addEventListener("input", (e) => {
     const size = parseInt(e.target.value);
@@ -1626,6 +3392,10 @@ addRoomBtn.addEventListener("click", () => {
     createRoomModal.classList.remove("hidden");
     roomNameInput.value = "";
     roomKindInput.value = "text";
+    if (roomRequiredRoleInput) {
+        roomRequiredRoleInput.value = state.role === "admin" ? "user" : "user";
+        roomRequiredRoleInput.disabled = state.role !== "admin";
+    }
     roomNameInput.focus();
 });
 cancelRoomBtn.addEventListener("click", () => createRoomModal.classList.add("hidden"));
@@ -1634,6 +3404,7 @@ createRoomForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const name = roomNameInput.value.trim();
     const kind = roomKindInput.value === "voice" ? "voice" : "text";
+    const requiredRole = roomRequiredRoleInput && roomRequiredRoleInput.value === "admin" ? "admin" : "user";
     if (!name) return;
 
     try {
@@ -1643,7 +3414,7 @@ createRoomForm.addEventListener("submit", async (e) => {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${state.token}`,
             },
-            body: JSON.stringify({ name, kind }),
+            body: JSON.stringify({ name, kind, required_role: requiredRole }),
         });
         if (res.ok) {
             createRoomModal.classList.add("hidden");
@@ -1668,7 +3439,8 @@ function renderUserPopoutContent(uid, user) {
         : user.username[0].toUpperCase();
 
     // Banner color
-    popoutBanner.style.background = getAvatarBgColor(colorIndex);
+    setBannerBackground(popoutBanner, user.banner_url || null, colorIndex);
+    applyStatusDot(popoutStatusDot, user.status || "online");
 
     // Username & Disc
     popoutUsername.textContent = user.username;
@@ -1679,13 +3451,17 @@ function renderUserPopoutContent(uid, user) {
     // Role display (using existing structure)
     const roleBadges = userPopout.querySelector("#popout-badges"); // This exists in HTML
     if (roleBadges) {
+        const statusText = presenceLabel(user.status || "online");
         roleBadges.innerHTML = `
         <div style="display:inline-flex;align-items:center;gap:4px;background:var(--background-secondary);padding:4px 8px;border-radius:4px;font-size:12px">
             <div style="width:8px;height:8px;border-radius:50%;background:${user.role === 'admin' ? '#ed4245' : '#99aab5'}"></div>
             ${user.role === 'admin' ? 'Admin' : 'Membre'}
+        </div>
+        <div style="display:inline-flex;align-items:center;gap:6px;background:var(--background-secondary);padding:4px 8px;border-radius:4px;font-size:12px">
+            <div style="width:8px;height:8px;border-radius:50%;background:${presenceDotClass(user.status || 'online') === 'online' ? '#3ba55d' : presenceDotClass(user.status || 'online') === 'idle' ? '#faa61a' : presenceDotClass(user.status || 'online') === 'dnd' ? '#ed4245' : '#747f8d'}"></div>
+            ${statusText}
         </div>`;
     }
-
     // About Me display
     const aboutSection = userPopout.querySelector("#popout-about-section");
     const aboutText = userPopout.querySelector("#popout-about-text");
@@ -1729,6 +3505,86 @@ document.addEventListener("click", (e) => {
 // ── Context Menu Logic ─────────────────────────────────
 let ctxTarget = null;
 
+function setRoomSettingsFeedback(message, isError = false) {
+    if (!roomSettingsFeedback) return;
+    roomSettingsFeedback.textContent = message || "";
+    roomSettingsFeedback.style.color = isError ? "var(--red)" : "var(--green)";
+}
+
+function closeRoomSettingsModal() {
+    roomSettingsModal?.classList.add("hidden");
+    setRoomSettingsFeedback("");
+}
+
+function getPrivateRoleFallback() {
+    const roles = Array.isArray(state.serverRoles) ? state.serverRoles : [];
+    const firstPrivate = roles.find((role) => role.name && role.name !== "user");
+    return firstPrivate?.name || "admin";
+}
+
+function syncRoomPrivacyButtons(roleName) {
+    const mode = (roleName || "user") === "user" ? "public" : "private";
+    roomPrivacyPublicBtn?.classList.toggle("active", mode === "public");
+    roomPrivacyPrivateBtn?.classList.toggle("active", mode === "private");
+}
+
+function applyRoomPrivacyMode(mode) {
+    if (!roomSettingsRequiredRole) return;
+    if (mode === "public") {
+        roomSettingsRequiredRole.value = "user";
+        syncRoomPrivacyButtons("user");
+        return;
+    }
+
+    if (roomSettingsRequiredRole.value && roomSettingsRequiredRole.value !== "user") {
+        syncRoomPrivacyButtons(roomSettingsRequiredRole.value);
+        return;
+    }
+
+    const privateRole = getPrivateRoleFallback();
+    roomSettingsRequiredRole.value = privateRole;
+    syncRoomPrivacyButtons(privateRole);
+}
+
+async function openRoomSettingsModal(roomId) {
+    if (state.role !== "admin") return;
+    const room = state.rooms.find((r) => r.id === roomId);
+    if (!room || !roomSettingsModal || !roomSettingsRequiredRole || !roomSettingsName || !roomSettingsKind) return;
+
+    roomSettingsModal.classList.remove("hidden");
+    setRoomSettingsFeedback("Chargement...");
+
+    roomSettingsName.value = room.name || "";
+    roomSettingsKind.value = room.kind === "voice" ? "voice" : "text";
+
+    try {
+        const res = await fetch(`${API}/api/server/roles`, {
+            headers: { Authorization: `Bearer ${state.token}` }
+        });
+        const data = await res.json().catch(() => []);
+        if (!res.ok) {
+            setRoomSettingsFeedback(data.error || "Impossible de charger les rôles", true);
+            return;
+        }
+
+        state.serverRoles = Array.isArray(data) ? data : [];
+
+        roomSettingsRequiredRole.innerHTML = "";
+        state.serverRoles.forEach((role) => {
+            const opt = document.createElement("option");
+            opt.value = role.name;
+            opt.textContent = role.name;
+            roomSettingsRequiredRole.appendChild(opt);
+        });
+        const hasRole = state.serverRoles.some((role) => role.name === room.required_role);
+        roomSettingsRequiredRole.value = hasRole ? room.required_role : (state.serverRoles[0]?.name || "user");
+        syncRoomPrivacyButtons(roomSettingsRequiredRole.value);
+        setRoomSettingsFeedback("");
+    } catch (err) {
+        setRoomSettingsFeedback("Erreur réseau", true);
+    }
+}
+
 function showContextMenu(e, type, id, name) {
     e.preventDefault();
     e.stopPropagation();
@@ -1741,13 +3597,21 @@ function showContextMenu(e, type, id, name) {
     ctxHeaderTitle.textContent = type === "room" ? `#${name}` : name;
 
     ctxDeleteRoom.classList.add("hidden");
+    ctxRoomSettings.classList.add("hidden");
     ctxDeleteMessage.classList.add("hidden");
     ctxPromoteAdmin.classList.add("hidden");
+    ctxPurgeUserMessages.classList.add("hidden");
 
     if (type === "room") {
-        if (state.role === "admin") ctxDeleteRoom.classList.remove("hidden");
+        if (state.role === "admin") {
+            ctxDeleteRoom.classList.remove("hidden");
+            ctxRoomSettings.classList.remove("hidden");
+        }
     } else if (type === "user") {
-        if (state.role === "admin" && id !== state.userId) ctxPromoteAdmin.classList.remove("hidden");
+        if (state.role === "admin" && id !== state.userId) {
+            ctxPromoteAdmin.classList.remove("hidden");
+            ctxPurgeUserMessages.classList.remove("hidden");
+        }
     } else if (type === "message") {
         if (state.role === "admin" || name === state.username) {
             ctxDeleteMessage.classList.remove("hidden");
@@ -1780,6 +3644,99 @@ ctxDeleteRoom.addEventListener("click", async () => {
         }
     } catch (e) { alert("Erreur réseau"); }
 });
+
+ctxRoomSettings.addEventListener("click", async () => {
+    if (!ctxTarget || ctxTarget.type !== "room") return;
+    contextMenu.classList.add("hidden");
+    await openRoomSettingsModal(ctxTarget.id);
+});
+
+if (roomSettingsCancelBtn) {
+    roomSettingsCancelBtn.addEventListener("click", () => {
+        closeRoomSettingsModal();
+    });
+}
+
+if (roomSettingsModal) {
+    roomSettingsModal.addEventListener("click", (event) => {
+        if (event.target === roomSettingsModal) {
+            closeRoomSettingsModal();
+        }
+    });
+}
+
+if (roomSettingsRequiredRole) {
+    roomSettingsRequiredRole.addEventListener("change", () => {
+        syncRoomPrivacyButtons(roomSettingsRequiredRole.value);
+    });
+}
+
+if (roomPrivacyPublicBtn) {
+    roomPrivacyPublicBtn.addEventListener("click", () => {
+        applyRoomPrivacyMode("public");
+    });
+}
+
+if (roomPrivacyPrivateBtn) {
+    roomPrivacyPrivateBtn.addEventListener("click", () => {
+        applyRoomPrivacyMode("private");
+    });
+}
+
+if (roomSettingsForm) {
+    roomSettingsForm.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (!ctxTarget || ctxTarget.type !== "room") return;
+
+        const roomName = (roomSettingsName?.value || "").trim();
+        const roomKind = (roomSettingsKind?.value || "text").trim();
+        const requiredRole = roomSettingsRequiredRole?.value;
+        if (!roomName || !requiredRole) return;
+
+        try {
+            const res = await fetch(`${API}/api/rooms/${ctxTarget.id}`, {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${state.token}`,
+                },
+                body: JSON.stringify({
+                    name: roomName,
+                    kind: roomKind,
+                    required_role: requiredRole,
+                }),
+            });
+
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                setRoomSettingsFeedback(data.error || "Erreur", true);
+                return;
+            }
+
+            const targetRoom = state.rooms.find((r) => r.id === ctxTarget.id);
+            if (targetRoom) {
+                targetRoom.name = roomName;
+                targetRoom.kind = roomKind === "voice" ? "voice" : "text";
+                targetRoom.required_role = requiredRole;
+                if (state.currentRoomId === targetRoom.id) {
+                    state.currentRoomName = targetRoom.name;
+                    state.currentRoomKind = targetRoom.kind;
+                    currentRoomName.textContent = targetRoom.name;
+                    messageInput.placeholder = `Envoyer un message dans #${targetRoom.name}`;
+                    updateRoomModeUI(targetRoom.kind, targetRoom.name);
+                    if (targetRoom.kind === "text") {
+                        await loadMessages(targetRoom.id);
+                    }
+                }
+            }
+            renderRooms();
+            setRoomSettingsFeedback("Salon mis à jour.");
+            setTimeout(() => closeRoomSettingsModal(), 350);
+        } catch (err) {
+            setRoomSettingsFeedback("Erreur réseau", true);
+        }
+    });
+}
 
 ctxPromoteAdmin.addEventListener("click", async () => {
     if (!ctxTarget || ctxTarget.type !== "user") return;
@@ -1817,6 +3774,24 @@ ctxDeleteMessage.addEventListener("click", async () => {
             alert(data.error || "Erreur");
         }
     } catch (e) { alert("Erreur réseau"); }
+});
+
+ctxPurgeUserMessages.addEventListener("click", async () => {
+    if (!ctxTarget || ctxTarget.type !== "user") return;
+    contextMenu.classList.add("hidden");
+    if (!confirm(`Supprimer tous les messages de ${ctxTarget.name} ?`)) return;
+    try {
+        const res = await fetch(`${API}/api/users/${ctxTarget.id}/messages`, {
+            method: "DELETE",
+            headers: { Authorization: `Bearer ${state.token}` }
+        });
+        if (!res.ok) {
+            const data = await res.json();
+            alert(data.error || "Erreur");
+        }
+    } catch (e) {
+        alert("Erreur réseau");
+    }
 });
 
 // ── Utility Functions ──────────────────────────────────
@@ -1905,6 +3880,111 @@ function scrollToBottom() {
     });
 }
 
+function openSearchModal(prefill = "") {
+    if (!searchModal) return;
+    searchModal.classList.remove("hidden");
+    if (searchQueryInput && prefill !== undefined) {
+        searchQueryInput.value = (prefill || "").trim();
+        searchQueryInput.focus();
+    }
+    if (searchRoomScope) {
+        searchRoomScope.value = state.currentRoomId ? "current" : "all";
+    }
+}
+
+function closeSearchModal() {
+    searchModal?.classList.add("hidden");
+}
+
+function renderSearchResults(items) {
+    if (!searchResults) return;
+    if (!Array.isArray(items) || items.length === 0) {
+        searchResults.innerHTML = `<div class="search-result-item">Aucun résultat.</div>`;
+        return;
+    }
+
+    searchResults.innerHTML = "";
+    items.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "search-result-item";
+        const room = state.rooms.find((r) => r.id === item.room_id);
+        const roomLabel = room ? `#${room.name}` : "salon";
+        const content = (item.content && item.content.trim()) || (item.image_url ? "[Image]" : "Message");
+
+        row.innerHTML = `
+            <div class="search-result-head">
+                <span class="search-result-user">${escapeHtml(item.username || "Utilisateur")}</span>
+                <span class="search-result-meta">${escapeHtml(roomLabel)} • ${escapeHtml(formatTime(item.created_at))}</span>
+            </div>
+            <div class="search-result-content">${escapeHtml(content)}</div>
+        `;
+
+        row.addEventListener("click", async () => {
+            const targetRoom = state.rooms.find((r) => r.id === item.room_id);
+            if (!targetRoom) return;
+
+            if (state.currentRoomId !== targetRoom.id) {
+                await selectRoom(targetRoom);
+            }
+
+            closeSearchModal();
+
+            const target = messagesContainer.querySelector(`.message[data-id="${item.id}"]`);
+            if (target) {
+                target.scrollIntoView({ behavior: "smooth", block: "center" });
+                target.classList.add("message-mentioned");
+                setTimeout(() => target.classList.remove("message-mentioned"), 1400);
+            }
+        });
+
+        searchResults.appendChild(row);
+    });
+}
+
+async function runAdvancedSearch() {
+    const params = new URLSearchParams();
+
+    const q = (searchQueryInput?.value || "").trim();
+    const author = (searchAuthorInput?.value || "").trim();
+    const fromDate = (searchFromInput?.value || "").trim();
+    const toDate = (searchToInput?.value || "").trim();
+    const scope = (searchRoomScope?.value || "current").trim();
+
+    if (q) params.set("q", q);
+    if (author) params.set("author", author);
+    if (fromDate) params.set("from", fromDate);
+    if (toDate) params.set("to", toDate);
+    if (scope === "current" && state.currentRoomId) {
+        params.set("room_id", state.currentRoomId);
+    }
+    params.set("limit", "120");
+
+    if (searchResults) {
+        searchResults.innerHTML = `<div class="search-result-item">Recherche en cours...</div>`;
+    }
+
+    try {
+        const res = await fetch(`${API}/api/messages/search?${params.toString()}`, {
+            headers: { Authorization: `Bearer ${state.token}` }
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            const message = data.error || "Erreur de recherche";
+            if (searchResults) {
+                searchResults.innerHTML = `<div class="search-result-item">${escapeHtml(message)}</div>`;
+            }
+            return;
+        }
+
+        const items = await res.json();
+        renderSearchResults(items);
+    } catch (err) {
+        if (searchResults) {
+            searchResults.innerHTML = `<div class="search-result-item">Erreur réseau.</div>`;
+        }
+    }
+}
+
 // ── Init ───────────────────────────────────────────────
 if (state.token) {
     enterApp();
@@ -1913,6 +3993,37 @@ if (state.token) {
     app.classList.add("hidden");
 }
 updateVoiceQuickStatus();
+updateGlobalMentionBadge();
+
+if (chatSearch) {
+    chatSearch.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+            event.preventDefault();
+            openSearchModal(chatSearch.value || "");
+            runAdvancedSearch();
+        }
+    });
+}
+
+if (searchRunBtn) {
+    searchRunBtn.addEventListener("click", () => {
+        runAdvancedSearch();
+    });
+}
+
+if (searchCloseBtn) {
+    searchCloseBtn.addEventListener("click", () => {
+        closeSearchModal();
+    });
+}
+
+if (searchModal) {
+    searchModal.addEventListener("click", (event) => {
+        if (event.target === searchModal) {
+            closeSearchModal();
+        }
+    });
+}
 
 // ═══ Emoji Picker ══════════════════════════════════════
 const EMOJI_DATA = {
@@ -2075,13 +4186,13 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ── Drag & Drop Image Upload ───────────────────────────
-const chatArea = document.querySelector(".chat-area");
-chatArea.addEventListener("dragover", (e) => {
+const chatDropArea = document.querySelector(".chat-area");
+chatDropArea.addEventListener("dragover", (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
 });
 
-chatArea.addEventListener("drop", (e) => {
+chatDropArea.addEventListener("drop", (e) => {
     e.preventDefault();
     if (!state.currentRoomId) return;
     const files = e.dataTransfer.files;

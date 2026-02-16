@@ -1,0 +1,1 @@
+ALTER TABLE messages ADD COLUMN reply_to_id TEXT DEFAULT NULL;

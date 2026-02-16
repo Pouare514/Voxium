@@ -17,9 +17,12 @@ pub struct WsMessage {
     pub user_id: Option<String>,
     pub username: Option<String>,
     pub content: Option<String>,
+    pub reply_to_id: Option<String>,
     pub avatar_color: Option<i32>,
     pub image_url: Option<String>,
     pub avatar_url: Option<String>,
+    pub banner_url: Option<String>,
+    pub status: Option<String>,
     pub role: Option<String>,
     pub about: Option<String>,
     pub target_user_id: Option<String>,
@@ -103,6 +106,8 @@ pub async fn ws_handler(
                                     "username": _uname,
                                     "avatar_color": color,
                                     "avatar_url": ws_msg.avatar_url,
+                                    "banner_url": ws_msg.banner_url,
+                                    "status": ws_msg.status,
                                     "role": ws_msg.role,
                                     "about": ws_msg.about
                                 });
@@ -123,6 +128,32 @@ pub async fn ws_handler(
                                 // Handle MESSAGE
                         else if ws_msg.msg_type == "message" {
                              if let (Some(content), Some(rid), Some(uid), Some(uname)) = (&ws_msg.content, &ws_msg.room_id, &ws_msg.user_id, &ws_msg.username) {
+                                let room_required_role: Option<String> = sqlx::query_scalar("SELECT required_role FROM rooms WHERE id = ?")
+                                    .bind(rid)
+                                    .fetch_optional(&pool)
+                                    .await
+                                    .unwrap_or(None);
+
+                                let user_role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+                                    .bind(uid)
+                                    .fetch_optional(&pool)
+                                    .await
+                                    .unwrap_or(None);
+
+                                let allowed = match (room_required_role.as_deref(), user_role.as_deref()) {
+                                    (Some("user"), Some(_)) => true,
+                                    (Some(required), Some("admin")) => {
+                                        let _ = required;
+                                        true
+                                    }
+                                    (Some(required), Some(user_r)) => required == user_r,
+                                    _ => false,
+                                };
+
+                                if !allowed {
+                                    continue;
+                                }
+
                                 let has_content = !content.trim().is_empty();
                                 let has_image = ws_msg.image_url.as_ref().map_or(false, |u| !u.is_empty());
                                 if has_content || has_image {
@@ -130,7 +161,7 @@ pub async fn ws_handler(
                                     let now = chrono::Utc::now().to_rfc3339();
 
                                     let _ = sqlx::query(
-                                        "INSERT INTO messages (id, room_id, user_id, username, content, created_at, image_url) VALUES (?, ?, ?, ?, ?, ?, ?)"
+                                        "INSERT INTO messages (id, room_id, user_id, username, content, created_at, image_url, reply_to_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                                     )
                                     .bind(&msg_id)
                                     .bind(rid)
@@ -139,6 +170,7 @@ pub async fn ws_handler(
                                     .bind(content)
                                     .bind(&now)
                                     .bind(&ws_msg.image_url)
+                                    .bind(&ws_msg.reply_to_id)
                                     .execute(&pool)
                                     .await;
 
@@ -151,6 +183,10 @@ pub async fn ws_handler(
                         }
                         // Handle TYPING relay
                         else if ws_msg.msg_type == "typing" {
+                            let _ = tx.send(text.to_string());
+                        }
+                        // Handle PRESENCE relay
+                        else if ws_msg.msg_type == "presence" {
                             let _ = tx.send(text.to_string());
                         }
                         // Handle VOICE events relay

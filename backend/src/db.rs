@@ -61,6 +61,46 @@ pub async fn init_db() -> SqlitePool {
         }
     }
 
+    let migration_006 = include_str!("../../migrations/006_add_banner_url.sql");
+    for statement in migration_006.split(';') {
+        let trimmed = statement.trim();
+        if !trimmed.is_empty() {
+            sqlx::query(trimmed).execute(&pool).await.ok();
+        }
+    }
+
+    let migration_007 = include_str!("../../migrations/007_add_room_required_role.sql");
+    for statement in migration_007.split(';') {
+        let trimmed = statement.trim();
+        if !trimmed.is_empty() {
+            sqlx::query(trimmed).execute(&pool).await.ok();
+        }
+    }
+
+    let migration_008 = include_str!("../../migrations/008_add_message_reply.sql");
+    for statement in migration_008.split(';') {
+        let trimmed = statement.trim();
+        if !trimmed.is_empty() {
+            sqlx::query(trimmed).execute(&pool).await.ok();
+        }
+    }
+
+    let migration_009 = include_str!("../../migrations/009_add_message_pins.sql");
+    for statement in migration_009.split(';') {
+        let trimmed = statement.trim();
+        if !trimmed.is_empty() {
+            sqlx::query(trimmed).execute(&pool).await.ok();
+        }
+    }
+
+    let migration_010 = include_str!("../../migrations/010_add_server_roles.sql");
+    for statement in migration_010.split(';') {
+        let trimmed = statement.trim();
+        if !trimmed.is_empty() {
+            sqlx::query(trimmed).execute(&pool).await.ok();
+        }
+    }
+
     println!("✅ Database initialized");
     pool
 }

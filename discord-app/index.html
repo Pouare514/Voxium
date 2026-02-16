@@ -78,10 +78,18 @@
         <aside class="sidebar">
             <div class="sidebar-header">
                 <span>Discord2</span>
-                <svg class="sidebar-header-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                    stroke="currentColor" stroke-width="2">
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                </svg>
+                <div class="sidebar-header-actions">
+                    <button id="server-settings-btn" class="sidebar-header-btn hidden" title="Paramètres du serveur">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="3"></circle>
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                        </svg>
+                    </button>
+                    <svg class="sidebar-header-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                    </svg>
+                </div>
             </div>
             <div class="sidebar-section-title">
                 <span>SALONS TEXTUELS</span>
@@ -112,7 +120,7 @@
             <div class="sidebar-user">
                 <div class="user-avatar-wrapper">
                     <div class="user-avatar" id="user-avatar"></div>
-                    <div class="status-dot online"></div>
+                    <div class="status-dot online" id="self-status-dot"></div>
                 </div>
                 <div class="user-info">
                     <span id="user-name"></span>
@@ -147,6 +155,7 @@
                         </svg>
                     </button>
                 </div>
+                <span id="global-mention-badge" class="global-mention-badge hidden">0</span>
             </div>
         </aside>
 
@@ -200,17 +209,79 @@
             </div>
             <div id="voice-room-panel" class="voice-room-panel hidden">
                 <div class="voice-room-card">
-                    <h2 id="voice-room-title">Salon vocal</h2>
-                    <p id="voice-room-subtitle">Rejoignez ce salon pour discuter en audio.</p>
+                    <div class="voice-room-top">
+                        <div class="voice-room-heading">
+                            <h2 id="voice-room-title">Salon vocal</h2>
+                            <p id="voice-room-subtitle">Rejoignez ce salon pour discuter en audio.</p>
+                        </div>
+                        <div id="voice-room-chip" class="voice-room-chip">Non connecté</div>
+                    </div>
+                    <div class="voice-room-main">
+                        <div class="voice-stage-column">
+                            <div id="voice-screens-wrap" class="voice-screens-wrap">
+                                <div class="voice-members-title">Partages d'écran</div>
+                                <div id="voice-screens-grid" class="voice-screens-grid"></div>
+                            </div>
+                        </div>
+                        <div class="voice-side-column">
+                            <div class="voice-share-settings">
+                                <div class="voice-members-title">Qualité du partage</div>
+                                <div class="voice-share-grid">
+                                    <label class="voice-share-field" for="voice-screen-quality">
+                                        <span>Résolution</span>
+                                        <select id="voice-screen-quality">
+                                            <option value="auto">Auto</option>
+                                            <option value="720">720p</option>
+                                            <option value="1080" selected>1080p</option>
+                                            <option value="1440">1440p</option>
+                                        </select>
+                                    </label>
+                                    <label class="voice-share-field" for="voice-screen-fps">
+                                        <span>FPS</span>
+                                        <select id="voice-screen-fps">
+                                            <option value="15">15</option>
+                                            <option value="30" selected>30</option>
+                                            <option value="60">60</option>
+                                        </select>
+                                    </label>
+                                </div>
+                            </div>
+                            <div class="voice-members-wrap">
+                                <div class="voice-members-title">Connectés</div>
+                                <ul id="voice-members-list" class="voice-members-list"></ul>
+                            </div>
+                        </div>
+                    </div>
                     <div class="voice-room-actions">
                         <button id="join-voice-btn" class="btn-primary" type="button">Rejoindre</button>
-                        <button id="leave-voice-btn" class="btn-secondary hidden" type="button">Quitter</button>
-                        <button id="voice-mute-btn" class="btn-secondary hidden" type="button">Muet</button>
-                        <button id="voice-deafen-btn" class="btn-secondary hidden" type="button">Sourdine</button>
-                    </div>
-                    <div class="voice-members-wrap">
-                        <div class="voice-members-title">Connectés</div>
-                        <ul id="voice-members-list" class="voice-members-list"></ul>
+                        <button id="leave-voice-btn" class="btn-secondary voice-control-btn voice-control-leave hidden" type="button" title="Quitter" aria-label="Quitter">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+                                <line x1="4" y1="4" x2="20" y2="20"></line>
+                            </svg>
+                        </button>
+                        <button id="voice-mute-btn" class="btn-secondary voice-control-btn hidden" type="button" title="Muet" aria-label="Muet">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
+                                <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                                <line x1="12" y1="19" x2="12" y2="23"></line>
+                                <line x1="8" y1="23" x2="16" y2="23"></line>
+                            </svg>
+                        </button>
+                        <button id="voice-deafen-btn" class="btn-secondary voice-control-btn hidden" type="button" title="Sourdine" aria-label="Sourdine">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
+                            </svg>
+                        </button>
+                        <button id="voice-screen-btn" class="btn-secondary voice-control-btn hidden" type="button" title="Partager écran" aria-label="Partager écran">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+                                <line x1="8" y1="21" x2="16" y2="21"></line>
+                                <line x1="12" y1="17" x2="12" y2="21"></line>
+                            </svg>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -238,6 +309,19 @@
                         <span id="upload-filename" class="upload-filename"></span>
                     </div>
                 </div>
+                <div id="reply-preview" class="reply-preview hidden">
+                    <div class="reply-preview-main">
+                        <span class="reply-label">Réponse à </span>
+                        <span id="reply-target-name" class="reply-target-name">Utilisateur</span>
+                        <span id="reply-target-snippet" class="reply-target-snippet"></span>
+                    </div>
+                    <button type="button" id="reply-cancel-btn" class="reply-cancel-btn" title="Annuler la réponse">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
                 <form id="message-form">
                     <input type="file" id="file-input" accept="image/*" style="display:none" />
                     <button type="button" class="input-action-btn" id="attach-btn" title="Joindre une image">
@@ -263,6 +347,23 @@
                     </div>
                 </form>
             </div>
+
+            <aside id="thread-panel" class="thread-panel hidden">
+                <div class="thread-panel-header">
+                    <div class="thread-panel-title">Thread</div>
+                    <button id="thread-close-btn" class="thread-close-btn" type="button" title="Fermer le thread">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+                </div>
+                <div id="thread-root" class="thread-root"></div>
+                <div id="thread-replies" class="thread-replies"></div>
+                <form id="thread-form" class="thread-form">
+                    <input id="thread-input" type="text" placeholder="Répondre dans le thread" autocomplete="off" />
+                </form>
+            </aside>
         </main>
 
         <!-- Member List (Right) -->
@@ -272,6 +373,54 @@
                 <!-- Dynamically populated -->
             </ul>
         </aside>
+    </div>
+
+    <!-- Pinned Messages Modal -->
+    <div id="pinned-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:760px;width:min(760px, 92vw);">
+            <h2>Messages épinglés</h2>
+            <div id="pinned-list" class="pinned-list"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn-secondary" id="pinned-close-btn">Fermer</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Advanced Search Modal -->
+    <div id="search-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:760px;width:min(760px, 92vw);">
+            <h2>Recherche avancée</h2>
+            <div class="search-grid">
+                <label class="search-field">
+                    <span>Contenu</span>
+                    <input id="search-query" type="text" placeholder="Rechercher dans les messages" />
+                </label>
+                <label class="search-field">
+                    <span>Auteur</span>
+                    <input id="search-author" type="text" placeholder="Nom d'utilisateur" />
+                </label>
+                <label class="search-field">
+                    <span>Depuis</span>
+                    <input id="search-from" type="date" />
+                </label>
+                <label class="search-field">
+                    <span>Jusqu'à</span>
+                    <input id="search-to" type="date" />
+                </label>
+                <label class="search-field">
+                    <span>Portée</span>
+                    <select id="search-room-scope">
+                        <option value="current">Salon actuel</option>
+                        <option value="all">Tous les salons visibles</option>
+                    </select>
+                </label>
+            </div>
+            <div id="search-results" class="search-results"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn-secondary" id="search-close-btn">Fermer</button>
+                <button type="button" class="btn-primary" id="search-run-btn">Rechercher</button>
+            </div>
+        </div>
     </div>
 
     <!-- Create Room Modal -->
@@ -290,11 +439,90 @@
                         <option value="voice">Salon vocal</option>
                     </select>
                 </div>
+                <div class="form-group">
+                    <label for="room-required-role-input">Accès</label>
+                    <select id="room-required-role-input" required>
+                        <option value="user">Tous les membres</option>
+                        <option value="admin">Admins seulement</option>
+                    </select>
+                </div>
                 <div class="modal-actions">
                     <button type="button" class="btn-secondary" id="cancel-room-btn">Annuler</button>
                     <button type="submit" class="btn-primary">Créer</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Room Settings Modal -->
+    <div id="room-settings-modal" class="modal hidden">
+        <div class="modal-content small">
+            <h2>Paramètres du salon</h2>
+            <form id="room-settings-form">
+                <div class="form-group">
+                    <label for="room-settings-name">Nom du salon</label>
+                    <input id="room-settings-name" type="text" maxlength="64" required />
+                </div>
+                <div class="form-group">
+                    <label for="room-settings-kind">Type</label>
+                    <select id="room-settings-kind" required>
+                        <option value="text">Salon textuel</option>
+                        <option value="voice">Salon vocal</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Confidentialité</label>
+                    <div class="room-privacy-toggle" id="room-privacy-toggle">
+                        <button type="button" class="room-privacy-btn active" id="room-privacy-public-btn">Public</button>
+                        <button type="button" class="room-privacy-btn" id="room-privacy-private-btn">Privé</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="room-settings-required-role">Rôle requis</label>
+                    <select id="room-settings-required-role" required></select>
+                </div>
+                <p id="room-settings-feedback" class="success-text"></p>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary" id="room-settings-cancel-btn">Annuler</button>
+                    <button type="submit" class="btn-primary">Enregistrer</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Server Settings Modal -->
+    <div id="server-settings-modal" class="modal hidden">
+        <div class="modal-content" style="max-width:760px;width:min(760px, 92vw);">
+            <h2>Paramètres du serveur</h2>
+            <div class="server-settings-grid">
+                <div class="server-settings-col">
+                    <h3>Rôles</h3>
+                    <form id="server-role-form" class="server-role-form">
+                        <input id="server-role-name" type="text" placeholder="Nom du rôle (ex: modo)" maxlength="24" required />
+                        <input id="server-role-color" type="color" value="#99aab5" />
+                        <button type="submit" class="btn-primary">Créer</button>
+                    </form>
+                    <div id="server-roles-list" class="server-roles-list"></div>
+                </div>
+                <div class="server-settings-col">
+                    <h3>Attribution</h3>
+                    <div class="server-assign-form">
+                        <label class="search-field">
+                            <span>Membre</span>
+                            <select id="server-user-select"></select>
+                        </label>
+                        <label class="search-field">
+                            <span>Rôle</span>
+                            <select id="server-role-select"></select>
+                        </label>
+                        <button id="server-assign-btn" type="button" class="btn-primary">Attribuer</button>
+                        <p id="server-settings-feedback" class="success-text"></p>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn-secondary" id="server-settings-close-btn">Fermer</button>
+            </div>
         </div>
     </div>
 
@@ -304,25 +532,90 @@
             <!-- Settings Sidebar -->
             <nav class="settings-nav">
                 <div class="settings-nav-inner">
-                    <div class="settings-nav-header">PARAMÈTRES UTILISATEUR</div>
-                    <button class="settings-nav-item active" data-section="my-account">Mon compte</button>
-                    <button class="settings-nav-item" data-section="profiles">Profils</button>
-                    <div class="settings-nav-separator"></div>
-                    <div class="settings-nav-header">PARAMÈTRES DE L'APPLI</div>
-                    <button class="settings-nav-item" data-section="appearance">Apparence</button>
-                    <button class="settings-nav-item" data-section="accessibility">Accessibilité</button>
-                    <div class="settings-nav-separator"></div>
-                    <button class="settings-nav-item" data-section="about">À propos</button>
-                    <div class="settings-nav-separator"></div>
-                    <button class="settings-nav-item danger" id="logout-settings-btn">
-                        <span>Déconnexion</span>
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                            stroke-width="2">
-                            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
-                            <polyline points="16,17 21,12 16,7" />
-                            <line x1="21" y1="12" x2="9" y2="12" />
-                        </svg>
-                    </button>
+                    <div class="settings-user-mini">
+                        <div id="settings-mini-avatar" class="settings-mini-avatar">U</div>
+                        <div class="settings-mini-meta">
+                            <div id="settings-mini-name" class="settings-mini-name">Username</div>
+                            <button class="settings-mini-edit" data-section="profiles">Modifier les profils</button>
+                        </div>
+                    </div>
+
+                    <div class="settings-search-wrap">
+                        <input id="settings-search-input" type="text" placeholder="Rechercher" />
+                    </div>
+
+                    <div class="settings-nav-scroll">
+                        <div class="settings-nav-header">PARAMÈTRES UTILISATEUR</div>
+                        <button class="settings-nav-item active" data-section="my-account">
+                            <span class="settings-item-left">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                    <circle cx="12" cy="7" r="4"></circle>
+                                </svg>
+                                <span>Mon compte</span>
+                            </span>
+                        </button>
+                        <button class="settings-nav-item" data-section="profiles">
+                            <span class="settings-item-left">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <circle cx="12" cy="10" r="3"></circle>
+                                    <path d="M7 18c1.2-2 2.7-3 5-3s3.8 1 5 3"></path>
+                                </svg>
+                                <span>Profils</span>
+                            </span>
+                        </button>
+
+                        <div class="settings-nav-separator"></div>
+                        <div class="settings-nav-header">PARAMÈTRES DE L'APPLI</div>
+                        <button class="settings-nav-item" data-section="appearance">
+                            <span class="settings-item-left">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="5"></circle>
+                                    <line x1="12" y1="1" x2="12" y2="3"></line>
+                                    <line x1="12" y1="21" x2="12" y2="23"></line>
+                                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                                </svg>
+                                <span>Apparence</span>
+                            </span>
+                        </button>
+                        <button class="settings-nav-item" data-section="accessibility">
+                            <span class="settings-item-left">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="4" r="2"></circle>
+                                    <path d="M6 8h12"></path>
+                                    <path d="M12 10v10"></path>
+                                    <path d="M8 22l4-6 4 6"></path>
+                                </svg>
+                                <span>Accessibilité</span>
+                            </span>
+                        </button>
+                        <button class="settings-nav-item" data-section="about">
+                            <span class="settings-item-left">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="12" y1="16" x2="12" y2="12"></line>
+                                    <line x1="12" y1="8" x2="12.01" y2="8"></line>
+                                </svg>
+                                <span>À propos</span>
+                            </span>
+                        </button>
+
+                        <div class="settings-nav-separator"></div>
+
+                        <button class="settings-nav-item danger" id="logout-settings-btn">
+                            <span class="settings-item-left">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                                    <polyline points="16,17 21,12 16,7" />
+                                    <line x1="21" y1="12" x2="9" y2="12" />
+                                </svg>
+                                <span>Déconnexion</span>
+                            </span>
+                        </button>
+                    </div>
                 </div>
             </nav>
 
@@ -333,12 +626,16 @@
                     <!-- Mon Compte -->
                     <section id="section-my-account" class="settings-section active">
                         <h2>Mon compte</h2>
+                        <div class="settings-inline-tabs">
+                            <button class="settings-inline-tab active">Sécurité</button>
+                            <button class="settings-inline-tab">Statut</button>
+                        </div>
                         <div class="profile-card">
                             <div class="profile-banner" id="settings-banner"></div>
                             <div class="profile-card-body">
                                 <div class="profile-avatar-wrapper">
                                     <div class="profile-avatar" id="settings-avatar"></div>
-                                    <div class="status-dot online large"></div>
+                                    <div class="status-dot online large" id="settings-status-dot"></div>
                                 </div>
                                 <div class="profile-card-info">
                                     <span class="profile-card-name" id="settings-username-display">Username</span>
@@ -361,6 +658,19 @@
                                     <div class="account-field-value">••••••••</div>
                                 </div>
                                 <button class="btn-field-edit" data-edit="password">Modifier</button>
+                            </div>
+                            <div class="account-field">
+                                <div class="account-field-info">
+                                    <div class="account-field-label">STATUT</div>
+                                    <div class="account-field-value">
+                                        <select id="presence-select" class="settings-select">
+                                            <option value="online">En ligne</option>
+                                            <option value="idle">Absent</option>
+                                            <option value="dnd">Ne pas déranger</option>
+                                            <option value="invisible">Invisible</option>
+                                        </select>
+                                    </div>
+                                </div>
                             </div>
                         </div>
 
@@ -405,7 +715,7 @@
                             <div class="preview-body">
                                 <div class="preview-avatar-wrapper">
                                     <div class="preview-avatar" id="preview-avatar"></div>
-                                    <div class="status-dot online large"></div>
+                                    <div class="status-dot online large" id="preview-status-dot"></div>
                                 </div>
                                 <div class="preview-info">
                                     <h3 id="preview-username">Username</h3>
@@ -423,6 +733,23 @@
                                     <div class="preview-section-content" id="preview-member-since">Février 2026</div>
                                 </div>
                             </div>
+                        </div>
+                        <h3 class="settings-subtitle">Bannière de profil</h3>
+                        <div class="avatar-upload-section">
+                            <input type="file" id="banner-file-input" accept="image/png,image/jpeg,image/gif,image/webp"
+                                style="display:none" />
+                            <button class="btn-secondary" id="banner-upload-btn">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                    <polyline points="17 8 12 3 7 8"></polyline>
+                                    <line x1="12" y1="3" x2="12" y2="15"></line>
+                                </svg>
+                                Changer la bannière
+                            </button>
+                            <button class="btn-secondary danger" id="banner-remove-btn" style="display:none">Supprimer
+                                la bannière</button>
+                            <span id="banner-upload-status" class="upload-filename"></span>
                         </div>
                         <h3 class="settings-subtitle">Photo de profil</h3>
                         <div class="avatar-upload-section">
@@ -456,6 +783,51 @@
                     <section id="section-appearance" class="settings-section">
                         <h2>Apparence</h2>
                         <p class="settings-description">Personnalisez l'apparence de Discord2.</p>
+
+                        <h3 class="settings-subtitle">Thèmes de couleur</h3>
+                        <div id="color-theme-grid" class="color-theme-grid">
+                            <button class="color-theme-tile active" data-theme-color="blurple" title="Blurple">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #5865f2, #4752c4);"></span>
+                            </button>
+                            <button class="color-theme-tile" data-theme-color="teal" title="Océan">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #1abc9c, #0f9d82);"></span>
+                            </button>
+                            <button class="color-theme-tile" data-theme-color="emerald" title="Émeraude">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #57f287, #2fbf71);"></span>
+                            </button>
+                            <button class="color-theme-tile" data-theme-color="sunset" title="Sunset">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #fba95f, #f06595);"></span>
+                            </button>
+                            <button class="color-theme-tile" data-theme-color="rose" title="Rose">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #ff5ea8, #d63384);"></span>
+                            </button>
+                            <button class="color-theme-tile" data-theme-color="crimson" title="Crimson">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #ed4245, #c0392b);"></span>
+                            </button>
+                            <button class="color-theme-tile" data-theme-color="amber" title="Ambre">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #f1c40f, #e67e22);"></span>
+                            </button>
+                            <button class="color-theme-tile" data-theme-color="violet" title="Violet">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #9b59b6, #6c5ce7);"></span>
+                            </button>
+                            <button class="color-theme-tile" data-theme-color="midnight" title="Midnight">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #2d3436, #6c5ce7);"></span>
+                            </button>
+                            <button class="color-theme-tile" data-theme-color="sky" title="Sky">
+                                <span class="color-theme-swatch" style="background: linear-gradient(135deg, #4dabf7, #1c7ed6);"></span>
+                            </button>
+                        </div>
+
+                        <div class="toggle-setting">
+                            <div class="toggle-info">
+                                <div class="toggle-title">Activer la teinte de fond</div>
+                                <div class="toggle-desc">Applique la couleur du thème sur tout l'arrière-plan.</div>
+                            </div>
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="color-theme-bg-toggle" checked />
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
 
                         <h3 class="settings-subtitle">Thème</h3>
                         <div class="theme-selector">
@@ -577,13 +949,32 @@
         </div>
     </div>
 
+    <div id="banner-crop-modal" class="modal hidden">
+        <div class="modal-content banner-crop-content">
+            <h2>Recadrer la bannière</h2>
+            <div id="banner-crop-preview" class="banner-crop-preview"></div>
+            <div class="banner-crop-controls">
+                <label for="banner-crop-zoom">Zoom</label>
+                <input id="banner-crop-zoom" type="range" min="1" max="3" step="0.01" value="1" />
+                <label for="banner-crop-x">Position horizontale</label>
+                <input id="banner-crop-x" type="range" min="-1" max="1" step="0.01" value="0" />
+                <label for="banner-crop-y">Position verticale</label>
+                <input id="banner-crop-y" type="range" min="-1" max="1" step="0.01" value="0" />
+            </div>
+            <div class="modal-actions">
+                <button id="banner-crop-cancel" type="button" class="btn-secondary">Annuler</button>
+                <button id="banner-crop-apply" type="button" class="btn-primary">Appliquer</button>
+            </div>
+        </div>
+    </div>
+
     <!-- User Popout Card -->
     <div id="user-popout" class="user-popout hidden">
         <div class="popout-banner" id="popout-banner"></div>
         <div class="popout-body">
             <div class="popout-avatar-wrapper">
                 <div class="popout-avatar" id="popout-avatar"></div>
-                <div class="status-dot online large"></div>
+                <div class="status-dot online large" id="popout-status-dot"></div>
             </div>
             <h3 class="popout-username" id="popout-username">Username</h3>
             <span class="popout-disc" id="popout-disc">#0000</span>
@@ -620,6 +1011,13 @@
             </svg>
             <span>Supprimer le salon</span>
         </div>
+        <div class="menu-item hidden" id="ctx-room-settings">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+            </svg>
+            <span>Paramètres du salon</span>
+        </div>
         <div class="menu-item danger hidden" id="ctx-delete-message">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="3 6 5 6 21 6"></polyline>
@@ -632,6 +1030,15 @@
                 <path d="M12 15l-2 5 9-11h-5l2-5-9 11h5z"></path>
             </svg>
             <span>Promouvoir Admin</span>
+        </div>
+        <div class="menu-item danger hidden" id="ctx-purge-user-messages">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="3 6 5 6 21 6"></polyline>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                <line x1="10" y1="11" x2="10" y2="17"></line>
+                <line x1="14" y1="11" x2="14" y2="17"></line>
+            </svg>
+            <span>Supprimer ses messages</span>
         </div>
     </div>
 

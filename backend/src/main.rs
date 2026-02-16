@@ -47,13 +47,23 @@ async fn main() -> std::io::Result<()> {
             .route("/api/users/me", web::patch().to(auth::update_profile))
             .route("/api/users/{id}", web::delete().to(auth::delete_user))
             .route("/api/users/{id}/role", web::patch().to(auth::update_user_role))
+            .route("/api/server/roles", web::get().to(auth::list_server_roles))
+            .route("/api/server/roles", web::post().to(auth::create_server_role))
+            .route("/api/server/roles/{name}", web::delete().to(auth::delete_server_role))
+            .route("/api/server/users", web::get().to(auth::list_server_users))
             // Rooms
             .route("/api/rooms", web::get().to(rooms::list_rooms))
             .route("/api/rooms", web::post().to(rooms::create_room))
+            .route("/api/rooms/{id}", web::patch().to(rooms::update_room))
             .route("/api/rooms/{id}", web::delete().to(rooms::delete_room))
             // Messages
             .route("/api/messages/{id}", web::delete().to(messages::delete_message))
+            .route("/api/messages/search", web::get().to(messages::search_messages))
+            .route("/api/messages/{id}/pin", web::post().to(messages::pin_message))
+            .route("/api/messages/{id}/pin", web::delete().to(messages::unpin_message))
+            .route("/api/users/{id}/messages", web::delete().to(messages::delete_user_messages))
             .route("/api/rooms/{room_id}/messages", web::get().to(messages::get_messages))
+            .route("/api/rooms/{room_id}/pins", web::get().to(messages::get_pinned_messages))
             // Uploads
             .route("/api/upload", web::post().to(uploads::upload_image))
             // Serve uploaded files
