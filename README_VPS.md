@@ -1,6 +1,7 @@
 # README Déploiement VPS
 
 Guide de déploiement de Voxium sur VPS avec:
+
 - backend Rust en service systemd
 - reverse proxy Nginx
 - TLS pour HTTPS/WSS
@@ -27,6 +28,7 @@ sudo apt install -y git curl build-essential pkg-config libssl-dev nginx
 ```
 
 Installer Rust:
+
 ```bash
 curl https://sh.rustup.rs -sSf | sh
 source $HOME/.cargo/env
@@ -45,6 +47,7 @@ cargo build --release -p backend
 ```
 
 Binaire backend généré ici:
+
 - `/opt/voxium/target/release/backend`
 
 ---
@@ -190,6 +193,7 @@ sudo certbot --nginx -d chat.ton-domaine.com
 ```
 
 Après ça, ton endpoint sera:
+
 - API: `https://chat.ton-domaine.com`
 - WS: `wss://chat.ton-domaine.com/ws`
 
@@ -285,11 +289,13 @@ sudo systemctl status voxium-backend
 ## 11) Vérifications rapides
 
 API:
+
 ```bash
 curl -i https://chat.ton-domaine.com/api/health
 ```
 
 WebSocket (test simple):
+
 - ouvrir l’app et vérifier que la connexion WS est stable
 - vérifier les logs backend en parallèle:
 
@@ -321,3 +327,4 @@ Tu peux cronifier ce backup + sync externe (S3, rsync, etc.).
 ---
 
 Si tu veux, je peux te préparer une version **docker-compose** (backend + nginx + volume DB + uploads) pour simplifier encore le déploiement.
+
