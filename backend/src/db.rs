@@ -1,5 +1,5 @@
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
-use std::path::Path;
+use sqlx::{Pool, Sqlite, sqlite::{SqlitePool, SqlitePoolOptions}};
+use std::{fs, path::Path};
 
 /// Create the SQLite connection pool and run migrations.
 pub async fn init_db() -> SqlitePool {
@@ -39,104 +39,23 @@ pub async fn init_db() -> SqlitePool {
         .execute(&pool)
         .await;
 
-    // Run migrations
-    let migration_sql = include_str!("../../migrations/001_init.sql");
-    for statement in migration_sql.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok(); // Ignore errors if table exists
-        }
-    }
+   let files = [
+       "../../migrations/001_init.sql",
+       "../../migrations/002_add_settings.sql",
+       "../../migrations/003_add_images.sql",
+       "../../migrations/004_add_avatar_url.sql",
+       "../../migrations/005_add_room_kind.sql",
+       "../../migrations/006_add_banner_url.sql",
+       "../../migrations/007_add_room_required_role.sql",
+       "../../migrations/008_add_message_reply.sql",
+       "../../migrations/009_add_message_pins.sql",
+       "../../migrations/010_add_server_roles.sql",
+       "../../migrations/011_add_message_reactions.sql",
+    ];
 
-    let migration_002 = include_str!("../../migrations/002_add_settings.sql");
-    for statement in migration_002.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-             // We use ok() because columns might already exist if run multiple times
-             // In a real app we'd use a migrations table to track versions
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_003 = include_str!("../../migrations/003_add_images.sql");
-    for statement in migration_003.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_004 = include_str!("../../migrations/004_add_avatar_url.sql");
-    for statement in migration_004.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_005 = include_str!("../../migrations/005_add_room_kind.sql");
-    for statement in migration_005.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_006 = include_str!("../../migrations/006_add_banner_url.sql");
-    for statement in migration_006.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_007 = include_str!("../../migrations/007_add_room_required_role.sql");
-    for statement in migration_007.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_008 = include_str!("../../migrations/008_add_message_reply.sql");
-    for statement in migration_008.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_009 = include_str!("../../migrations/009_add_message_pins.sql");
-    for statement in migration_009.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_010 = include_str!("../../migrations/010_add_server_roles.sql");
-    for statement in migration_010.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_011 = include_str!("../../migrations/011_add_message_reactions.sql");
-    for statement in migration_011.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
-
-    let migration_012 = include_str!("../../migrations/012_add_perf_indexes.sql");
-    for statement in migration_012.split(';') {
-        let trimmed = statement.trim();
-        if !trimmed.is_empty() {
-            sqlx::query(trimmed).execute(&pool).await.ok();
-        }
-    }
+   for file in files {
+     migration(file, &pool).await;
+   }
 
     let migration_013 = include_str!("../../migrations/013_add_discord_oauth.sql");
     for statement in migration_013.split(';') {
@@ -148,4 +67,19 @@ pub async fn init_db() -> SqlitePool {
 
     println!("✅ Database initialized");
     pool
+}
+
+async fn migration(path: &str, pool: &Pool<Sqlite>) {
+  let migration = fs::read_to_string(path);
+  match migration {
+    Ok(migration_content) => {
+      for statement in migration_content.split(';') {
+        let trimmed = statement.trim();
+        if !trimmed.is_empty() {
+            sqlx::query(trimmed).execute(pool).await.ok();
+        }
+      }
+    }
+    Err(e) => { print!("Erreur lors de la lecture du fichier : {}", e)}
+  }
 }
