@@ -1,7 +1,8 @@
-use actix_web::{web, HttpRequest, HttpResponse};
+use actix_web::{http::StatusCode, web, HttpRequest, HttpResponse};
 use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::Utc;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sqlx::{SqlitePool, Row};
 use uuid::Uuid;
@@ -42,6 +43,44 @@ pub struct UpdateProfile {
     pub password: Option<String>,
     pub avatar_url: Option<String>,
     pub banner_url: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscordExchangePayload {
+    pub code: String,
+    pub redirect_uri: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscordProxyPayload {
+    pub method: Option<String>,
+    pub path: String,
+    pub body: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DiscordPublicOAuthConfig {
+    pub authorize_base_url: String,
+    pub client_id: String,
+    pub redirect_uri: String,
+    pub scope: String,
+    pub response_type: String,
+    pub prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordTokenResponse {
+    access_token: String,
+    expires_in: i64,
+    refresh_token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordUser {
+    id: String,
+    username: String,
+    global_name: Option<String>,
+    avatar: Option<String>,
 }
 
 // ── JWT helpers ─────────────────────────────────────────
@@ -86,6 +125,170 @@ pub fn extract_claims(req: &HttpRequest) -> Option<Claims> {
     let auth_header = req.headers().get("Authorization")?.to_str().ok()?;
     let token = auth_header.strip_prefix("Bearer ")?;
     validate_token(token)
+}
+
+fn discord_api_base_url() -> String {
+    std::env::var("DISCORD_API_BASE_URL").unwrap_or_else(|_| "https://discord.com/api/v10".into())
+}
+
+fn discord_oauth_token_url() -> String {
+    std::env::var("DISCORD_OAUTH_TOKEN_URL").unwrap_or_else(|_| "https://discord.com/api/oauth2/token".into())
+}
+
+fn discord_cdn_base_url() -> String {
+    std::env::var("DISCORD_CDN_BASE_URL").unwrap_or_else(|_| "https://cdn.discordapp.com".into())
+}
+
+fn discord_authorize_base_url() -> String {
+    std::env::var("DISCORD_AUTHORIZE_BASE_URL")
+        .unwrap_or_else(|_| "https://discord.com/oauth2/authorize".into())
+}
+
+fn discord_scope() -> String {
+    std::env::var("DISCORD_SCOPE").unwrap_or_else(|_| "identify email guilds".into())
+}
+
+fn discord_response_type() -> String {
+    std::env::var("DISCORD_RESPONSE_TYPE").unwrap_or_else(|_| "code".into())
+}
+
+fn discord_prompt() -> String {
+    std::env::var("DISCORD_PROMPT").unwrap_or_else(|_| "consent".into())
+}
+
+pub async fn get_discord_oauth_config() -> HttpResponse {
+    let client_id = std::env::var("DISCORD_CLIENT_ID").unwrap_or_default();
+    let redirect_uri = std::env::var("DISCORD_REDIRECT_URI").unwrap_or_default();
+
+    if client_id.trim().is_empty() || redirect_uri.trim().is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "Discord OAuth non configuré côté backend"
+        }));
+    }
+
+    HttpResponse::Ok().json(DiscordPublicOAuthConfig {
+        authorize_base_url: discord_authorize_base_url(),
+        client_id,
+        redirect_uri,
+        scope: discord_scope(),
+        response_type: discord_response_type(),
+        prompt: discord_prompt(),
+    })
+}
+
+fn discord_avatar_url(discord_user: &DiscordUser) -> Option<String> {
+    let avatar_hash = discord_user.avatar.as_ref()?;
+    Some(format!(
+        "{}/avatars/{}/{}.png?size=256",
+        discord_cdn_base_url(),
+        discord_user.id,
+        avatar_hash
+    ))
+}
+
+fn preferred_discord_username(discord_user: &DiscordUser) -> String {
+    let preferred = discord_user
+        .global_name
+        .as_deref()
+        .unwrap_or(&discord_user.username)
+        .trim();
+    if preferred.is_empty() {
+        "discord-user".to_string()
+    } else {
+        preferred.to_string()
+    }
+}
+
+async fn allocate_unique_username(pool: &SqlitePool, preferred: &str) -> String {
+    let base = if preferred.trim().is_empty() {
+        "discord-user"
+    } else {
+        preferred.trim()
+    };
+
+    for index in 0..150 {
+        let candidate = if index == 0 {
+            base.to_string()
+        } else {
+            format!("{}-{}", base, index)
+        };
+        let count = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE username = ?")
+            .bind(&candidate)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0);
+        if count == 0 {
+            return candidate;
+        }
+    }
+
+    format!("discord-{}", Uuid::new_v4().as_simple())
+}
+
+async fn exchange_discord_code(
+    client: &Client,
+    code: &str,
+    redirect_uri: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<DiscordTokenResponse, String> {
+    let response = client
+        .post(discord_oauth_token_url())
+        .form(&[
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirect_uri),
+        ])
+        .send()
+        .await
+        .map_err(|_| "Discord OAuth indisponible".to_string())?;
+
+    if !response.status().is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "OAuth exchange failed".to_string());
+        return Err(body);
+    }
+
+    response
+        .json::<DiscordTokenResponse>()
+        .await
+        .map_err(|_| "Réponse OAuth Discord invalide".to_string())
+}
+
+async fn refresh_discord_token(
+    client: &Client,
+    refresh_token: &str,
+    client_id: &str,
+    client_secret: &str,
+) -> Result<DiscordTokenResponse, String> {
+    let response = client
+        .post(discord_oauth_token_url())
+        .form(&[
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+        ])
+        .send()
+        .await
+        .map_err(|_| "Impossible de rafraîchir le token Discord".to_string())?;
+
+    if !response.status().is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Discord refresh failed".to_string());
+        return Err(body);
+    }
+
+    response
+        .json::<DiscordTokenResponse>()
+        .await
+        .map_err(|_| "Réponse refresh Discord invalide".to_string())
 }
 
 // ── Handlers ────────────────────────────────────────────
@@ -178,6 +381,378 @@ pub async fn login(
         }
     } else {
         HttpResponse::Unauthorized().json(serde_json::json!({ "error": "User not found" }))
+    }
+}
+
+pub async fn exchange_discord_oauth(
+    pool: web::Data<SqlitePool>,
+    body: web::Json<DiscordExchangePayload>,
+) -> HttpResponse {
+    let discord_client_id = match std::env::var("DISCORD_CLIENT_ID") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "DISCORD_CLIENT_ID missing"
+            }))
+        }
+    };
+
+    let discord_client_secret = match std::env::var("DISCORD_CLIENT_SECRET") {
+        Ok(value) if !value.trim().is_empty() => value,
+        _ => {
+            return HttpResponse::InternalServerError().json(serde_json::json!({
+                "error": "DISCORD_CLIENT_SECRET missing"
+            }))
+        }
+    };
+
+    let configured_redirect = std::env::var("DISCORD_REDIRECT_URI").ok();
+    let redirect_uri = body
+        .redirect_uri
+        .clone()
+        .or(configured_redirect.clone())
+        .unwrap_or_default();
+
+    if redirect_uri.trim().is_empty() {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "redirect_uri manquant"
+        }));
+    }
+
+    if let Some(expected) = configured_redirect {
+        if expected.trim() != redirect_uri.trim() {
+            return HttpResponse::BadRequest().json(serde_json::json!({
+                "error": "redirect_uri invalide"
+            }));
+        }
+    }
+
+    let client = Client::new();
+    let token_data = match exchange_discord_code(
+        &client,
+        body.code.trim(),
+        redirect_uri.trim(),
+        &discord_client_id,
+        &discord_client_secret,
+    )
+    .await
+    {
+        Ok(data) => data,
+        Err(error) => {
+            return HttpResponse::BadGateway().json(serde_json::json!({
+                "error": "Discord OAuth exchange failed",
+                "details": error,
+            }))
+        }
+    };
+
+    let discord_user_response = match client
+        .get(format!("{}/users/@me", discord_api_base_url()))
+        .bearer_auth(&token_data.access_token)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => {
+            return HttpResponse::BadGateway().json(serde_json::json!({
+                "error": "Discord API unavailable"
+            }))
+        }
+    };
+
+    if !discord_user_response.status().is_success() {
+        let details = discord_user_response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Cannot fetch Discord user".to_string());
+        return HttpResponse::BadGateway().json(serde_json::json!({
+            "error": "Discord user fetch failed",
+            "details": details,
+        }));
+    }
+
+    let discord_user = match discord_user_response.json::<DiscordUser>().await {
+        Ok(user) => user,
+        Err(_) => {
+            return HttpResponse::BadGateway().json(serde_json::json!({
+                "error": "Discord user payload invalid"
+            }))
+        }
+    };
+
+    let expires_at = Utc::now().timestamp() + token_data.expires_in;
+    let discord_avatar = discord_avatar_url(&discord_user);
+
+    let existing = sqlx::query(
+        "SELECT id, username, role, avatar_color, about, avatar_url, banner_url FROM users WHERE discord_id = ?",
+    )
+    .bind(&discord_user.id)
+    .fetch_optional(pool.get_ref())
+    .await
+    .ok()
+    .flatten();
+
+    let (user_id, username, role, avatar_color, about, avatar_url, banner_url) =
+        if let Some(row) = existing {
+            let user_id: String = row.get("id");
+            let username: String = row.get("username");
+            let role: String = row.get("role");
+            let avatar_color: i32 = row.try_get("avatar_color").unwrap_or(0);
+            let about: String = row.try_get("about").unwrap_or_default();
+            let old_avatar_url: Option<String> = row.try_get("avatar_url").unwrap_or(None);
+            let banner_url: Option<String> = row.try_get("banner_url").unwrap_or(None);
+            let merged_avatar_url = discord_avatar.clone().or(old_avatar_url);
+
+            let _ = sqlx::query("UPDATE users SET discord_access_token = ?, discord_refresh_token = ?, discord_token_expires_at = ?, avatar_url = ? WHERE id = ?")
+                .bind(&token_data.access_token)
+                .bind(token_data.refresh_token.as_deref())
+                .bind(expires_at)
+                .bind(&merged_avatar_url)
+                .bind(&user_id)
+                .execute(pool.get_ref())
+                .await;
+
+            (user_id, username, role, avatar_color, about, merged_avatar_url, banner_url)
+        } else {
+            let user_id = Uuid::new_v4().to_string();
+            let role = "user".to_string();
+            let avatar_color = 0;
+            let about = "".to_string();
+            let banner_url = None;
+            let preferred = preferred_discord_username(&discord_user);
+            let username = allocate_unique_username(pool.get_ref(), &preferred).await;
+            let generated_password = Uuid::new_v4().to_string();
+            let password_hash = hash(generated_password, DEFAULT_COST).expect("hash failed");
+
+            let insert_result = sqlx::query("INSERT INTO users (id, username, password_hash, role, avatar_color, about, avatar_url, banner_url, discord_id, discord_access_token, discord_refresh_token, discord_token_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+                .bind(&user_id)
+                .bind(&username)
+                .bind(&password_hash)
+                .bind(&role)
+                .bind(avatar_color)
+                .bind(&about)
+                .bind(&discord_avatar)
+                .bind(&banner_url)
+                .bind(&discord_user.id)
+                .bind(&token_data.access_token)
+                .bind(token_data.refresh_token.as_deref())
+                .bind(expires_at)
+                .execute(pool.get_ref())
+                .await;
+
+            if insert_result.is_err() {
+                return HttpResponse::Conflict().json(serde_json::json!({
+                    "error": "Impossible de créer l'utilisateur Discord local"
+                }));
+            }
+
+            (
+                user_id,
+                username,
+                role,
+                avatar_color,
+                about,
+                discord_avatar,
+                banner_url,
+            )
+        };
+
+    let token = create_token(&user_id, &username, &role);
+    HttpResponse::Ok().json(AuthResponse {
+        token,
+        user_id,
+        username,
+        role,
+        avatar_color,
+        about,
+        avatar_url,
+        banner_url,
+    })
+}
+
+pub async fn get_discord_me(req: HttpRequest, pool: web::Data<SqlitePool>) -> HttpResponse {
+    let claims = match extract_claims(&req) {
+        Some(c) => c,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+
+    let row = sqlx::query(
+        "SELECT discord_access_token, discord_refresh_token, discord_token_expires_at FROM users WHERE id = ?",
+    )
+    .bind(&claims.sub)
+    .fetch_optional(pool.get_ref())
+    .await
+    .unwrap_or(None);
+
+    let Some(row) = row else {
+        return HttpResponse::NotFound().finish();
+    };
+
+    let mut access_token: Option<String> = row.try_get("discord_access_token").unwrap_or(None);
+    let refresh_token: Option<String> = row.try_get("discord_refresh_token").unwrap_or(None);
+    let expires_at: Option<i64> = row.try_get("discord_token_expires_at").unwrap_or(None);
+
+    let discord_client_id = std::env::var("DISCORD_CLIENT_ID").unwrap_or_default();
+    let discord_client_secret = std::env::var("DISCORD_CLIENT_SECRET").unwrap_or_default();
+    let now = Utc::now().timestamp();
+    if access_token.is_some()
+        && expires_at.unwrap_or(0) <= now + 30
+        && !discord_client_id.is_empty()
+        && !discord_client_secret.is_empty()
+    {
+        if let Some(refresh) = refresh_token.as_deref() {
+            if let Ok(refreshed) =
+                refresh_discord_token(&Client::new(), refresh, &discord_client_id, &discord_client_secret)
+                    .await
+            {
+                let new_exp = Utc::now().timestamp() + refreshed.expires_in;
+                access_token = Some(refreshed.access_token.clone());
+                let _ = sqlx::query("UPDATE users SET discord_access_token = ?, discord_refresh_token = ?, discord_token_expires_at = ? WHERE id = ?")
+                    .bind(&refreshed.access_token)
+                    .bind(refreshed.refresh_token.as_deref().or(Some(refresh)))
+                    .bind(new_exp)
+                    .bind(&claims.sub)
+                    .execute(pool.get_ref())
+                    .await;
+            }
+        }
+    }
+
+    let Some(access_token) = access_token else {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "Discord account not linked"
+        }));
+    };
+
+    let response = match Client::new()
+        .get(format!("{}/users/@me", discord_api_base_url()))
+        .bearer_auth(access_token)
+        .send()
+        .await
+    {
+        Ok(res) => res,
+        Err(_) => return HttpResponse::BadGateway().json(serde_json::json!({ "error": "Discord API unavailable" })),
+    };
+
+    let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let payload = response.text().await.unwrap_or_else(|_| "{}".to_string());
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&payload) {
+        HttpResponse::build(status).json(json)
+    } else {
+        HttpResponse::build(status).body(payload)
+    }
+}
+
+pub async fn discord_proxy(
+    req: HttpRequest,
+    pool: web::Data<SqlitePool>,
+    body: web::Json<DiscordProxyPayload>,
+) -> HttpResponse {
+    let claims = match extract_claims(&req) {
+        Some(c) => c,
+        None => return HttpResponse::Unauthorized().finish(),
+    };
+
+    let path = body.path.trim();
+    if path.is_empty() || !path.starts_with('/') || path.starts_with("//") || path.starts_with("/http") {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "Discord path invalide"
+        }));
+    }
+
+    let method = body
+        .method
+        .as_deref()
+        .unwrap_or("GET")
+        .trim()
+        .to_uppercase();
+    let allowed = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+    if !allowed.contains(&method.as_str()) {
+        return HttpResponse::BadRequest().json(serde_json::json!({ "error": "Method not allowed" }));
+    }
+
+    let row = sqlx::query(
+        "SELECT discord_access_token, discord_refresh_token, discord_token_expires_at FROM users WHERE id = ?",
+    )
+    .bind(&claims.sub)
+    .fetch_optional(pool.get_ref())
+    .await
+    .unwrap_or(None);
+
+    let Some(row) = row else {
+        return HttpResponse::NotFound().finish();
+    };
+
+    let mut access_token: Option<String> = row.try_get("discord_access_token").unwrap_or(None);
+    let refresh_token: Option<String> = row.try_get("discord_refresh_token").unwrap_or(None);
+    let expires_at: Option<i64> = row.try_get("discord_token_expires_at").unwrap_or(None);
+
+    let discord_client_id = std::env::var("DISCORD_CLIENT_ID").unwrap_or_default();
+    let discord_client_secret = std::env::var("DISCORD_CLIENT_SECRET").unwrap_or_default();
+
+    let now = Utc::now().timestamp();
+    if access_token.is_some()
+        && expires_at.unwrap_or(0) <= now + 30
+        && !discord_client_id.is_empty()
+        && !discord_client_secret.is_empty()
+    {
+        if let Some(refresh) = refresh_token.as_deref() {
+            if let Ok(refreshed) =
+                refresh_discord_token(&Client::new(), refresh, &discord_client_id, &discord_client_secret)
+                    .await
+            {
+                let new_exp = Utc::now().timestamp() + refreshed.expires_in;
+                access_token = Some(refreshed.access_token.clone());
+                let _ = sqlx::query("UPDATE users SET discord_access_token = ?, discord_refresh_token = ?, discord_token_expires_at = ? WHERE id = ?")
+                    .bind(&refreshed.access_token)
+                    .bind(refreshed.refresh_token.as_deref().or(Some(refresh)))
+                    .bind(new_exp)
+                    .bind(&claims.sub)
+                    .execute(pool.get_ref())
+                    .await;
+            }
+        }
+    }
+
+    let Some(access_token) = access_token else {
+        return HttpResponse::BadRequest().json(serde_json::json!({
+            "error": "Discord account not linked"
+        }));
+    };
+
+    let method_obj = match method.as_str() {
+        "GET" => reqwest::Method::GET,
+        "POST" => reqwest::Method::POST,
+        "PUT" => reqwest::Method::PUT,
+        "PATCH" => reqwest::Method::PATCH,
+        "DELETE" => reqwest::Method::DELETE,
+        _ => reqwest::Method::GET,
+    };
+
+    let mut request_builder = Client::new()
+        .request(method_obj, format!("{}{}", discord_api_base_url(), path))
+        .bearer_auth(access_token);
+
+    if let Some(json_body) = &body.body {
+        request_builder = request_builder.json(json_body);
+    }
+
+    let response = match request_builder.send().await {
+        Ok(res) => res,
+        Err(_) => {
+            return HttpResponse::BadGateway().json(serde_json::json!({
+                "error": "Discord API unavailable"
+            }))
+        }
+    };
+
+    let status = StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let payload = response.text().await.unwrap_or_else(|_| "{}".to_string());
+
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&payload) {
+        HttpResponse::build(status).json(json)
+    } else {
+        HttpResponse::build(status).body(payload)
     }
 }
 

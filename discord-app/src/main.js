@@ -2,10 +2,13 @@
 //  Voxium — Frontend Application Logic (v3 — Full Clone)
 // ═══════════════════════════════════════════════════════
 
-const API = "http://127.0.0.1:8080";
-const WS_URL = "ws://127.0.0.1:8080/ws";
+const RUNTIME_CONFIG = window.VOXIUM_RUNTIME_CONFIG || {};
+const API = RUNTIME_CONFIG.apiBaseUrl || "http://127.0.0.1:8080";
+const WS_URL = RUNTIME_CONFIG.wsUrl || "ws://127.0.0.1:8080/ws";
 const WEBRTC_CONFIG = {
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    iceServers: Array.isArray(RUNTIME_CONFIG.iceServers) && RUNTIME_CONFIG.iceServers.length > 0
+        ? RUNTIME_CONFIG.iceServers
+        : [{ urls: "stun:stun.l.google.com:19302" }]
 };
 const QUICK_REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
 const MESSAGE_REACTION_PICKER_ID = "message-reaction-picker";
@@ -108,6 +111,7 @@ const authForm = $("#auth-form");
 const authUsername = $("#auth-username");
 const authPassword = $("#auth-password");
 const authSubmit = $("#auth-submit");
+const authDiscordBtn = $("#auth-discord-btn");
 const authError = $("#auth-error");
 const tabLogin = $("#tab-login");
 const tabRegister = $("#tab-register");
@@ -335,6 +339,114 @@ function updateGlobalMentionBadge() {
 // ── Auth Mode ──────────────────────────────────────────
 let authMode = "login";
 
+function getDiscordOAuthConfig() {
+    return {
+        authorizeBaseUrl: (RUNTIME_CONFIG.discordAuthorizeBaseUrl || "https://discord.com/oauth2/authorize").trim(),
+        clientId: (RUNTIME_CONFIG.discordClientId || "").trim(),
+        redirectUri: (RUNTIME_CONFIG.discordRedirectUri || "").trim(),
+        scope: (RUNTIME_CONFIG.discordScope || "identify email guilds").trim(),
+        responseType: (RUNTIME_CONFIG.discordResponseType || "code").trim(),
+        prompt: (RUNTIME_CONFIG.discordPrompt || "consent").trim(),
+    };
+}
+
+function buildDiscordAuthorizeUrl() {
+    const cfg = getDiscordOAuthConfig();
+    if (!cfg.clientId || !cfg.redirectUri) {
+        return null;
+    }
+
+    const oauthState = (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function")
+        ? globalThis.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+    sessionStorage.setItem("discord_oauth_state", oauthState);
+
+    const params = new URLSearchParams({
+        client_id: cfg.clientId,
+        response_type: cfg.responseType,
+        redirect_uri: cfg.redirectUri,
+        scope: cfg.scope,
+        state: oauthState,
+    });
+
+    if (cfg.prompt) {
+        params.set("prompt", cfg.prompt);
+    }
+
+    return `${cfg.authorizeBaseUrl}?${params.toString()}`;
+}
+
+function cleanDiscordOAuthParams() {
+    const currentUrl = new URL(window.location.href);
+    currentUrl.searchParams.delete("code");
+    currentUrl.searchParams.delete("state");
+    currentUrl.searchParams.delete("error");
+    currentUrl.searchParams.delete("error_description");
+    const nextUrl = `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`;
+    window.history.replaceState({}, document.title, nextUrl);
+}
+
+async function handleDiscordOAuthCallback() {
+    const currentUrl = new URL(window.location.href);
+    const error = currentUrl.searchParams.get("error");
+    const errorDescription = currentUrl.searchParams.get("error_description");
+    const code = currentUrl.searchParams.get("code");
+    const stateParam = currentUrl.searchParams.get("state");
+
+    if (error) {
+        authError.textContent = decodeURIComponent(errorDescription || error || "Connexion Discord refusée.");
+        cleanDiscordOAuthParams();
+        return false;
+    }
+
+    if (!code) return false;
+
+    const expectedState = sessionStorage.getItem("discord_oauth_state");
+    if (expectedState && expectedState !== stateParam) {
+        authError.textContent = "État OAuth Discord invalide, recommencez.";
+        sessionStorage.removeItem("discord_oauth_state");
+        cleanDiscordOAuthParams();
+        return false;
+    }
+
+    const cfg = getDiscordOAuthConfig();
+    if (!cfg.redirectUri) {
+        authError.textContent = "Configuration Discord manquante (discordRedirectUri).";
+        cleanDiscordOAuthParams();
+        return false;
+    }
+
+    authError.textContent = "Connexion Discord en cours...";
+    try {
+        const response = await fetch(`${API}/api/auth/discord/exchange`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                code,
+                redirect_uri: cfg.redirectUri,
+            }),
+        });
+
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            authError.textContent = data.error || "Impossible de connecter votre compte Discord.";
+            cleanDiscordOAuthParams();
+            return false;
+        }
+
+        saveSession(data);
+        sessionStorage.removeItem("discord_oauth_state");
+        cleanDiscordOAuthParams();
+        authError.textContent = "";
+        return true;
+    } catch (err) {
+        authError.textContent = "Impossible de contacter le serveur";
+        cleanDiscordOAuthParams();
+        return false;
+    }
+}
+
 tabLogin.addEventListener("click", () => {
     authMode = "login";
     tabLogin.classList.add("active");
@@ -348,6 +460,18 @@ tabRegister.addEventListener("click", () => {
     tabLogin.classList.remove("active");
     authSubmit.textContent = "S'inscrire";
 });
+
+if (authDiscordBtn) {
+    authDiscordBtn.addEventListener("click", () => {
+        authError.textContent = "";
+        const authorizeUrl = buildDiscordAuthorizeUrl();
+        if (!authorizeUrl) {
+            authError.textContent = "Configuration Discord manquante (discordClientId / discordRedirectUri).";
+            return;
+        }
+        window.location.assign(authorizeUrl);
+    });
+}
 
 // ── Auth Form Submit ───────────────────────────────────
 authForm.addEventListener("submit", async (e) => {
@@ -3398,14 +3522,19 @@ async function runAdvancedSearch() {
 }
 
 // ── Init ───────────────────────────────────────────────
-if (state.token) {
-    enterApp();
-} else {
-    authModal.classList.remove("hidden");
-    app.classList.add("hidden");
+async function initApp() {
+    const discordAuthenticated = await handleDiscordOAuthCallback();
+    if (state.token || discordAuthenticated) {
+        enterApp();
+    } else {
+        authModal.classList.remove("hidden");
+        app.classList.add("hidden");
+    }
+    updateVoiceQuickStatus();
+    updateGlobalMentionBadge();
 }
-updateVoiceQuickStatus();
-updateGlobalMentionBadge();
+
+initApp();
 
 if (chatSearch) {
     chatSearch.addEventListener("keydown", (event) => {

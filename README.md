@@ -21,12 +21,14 @@ A Discord-like clone (text/voice chat + roles + moderation) built with:
 
 ## Features
 - Authentication (register/login)
+- Discord OAuth login (optional)
 - Text and voice channels
 - Real-time messaging via WebSocket
 - Image uploads
 - Replies, pins, advanced search
 - Server roles + room-level permissions
 - Server/room settings in the UI
+- Discord REST bridge endpoint (`/api/discord/proxy`) for custom client experiments
 
 ---
 
@@ -98,6 +100,9 @@ Example:
 PORT=8080
 JWT_SECRET=change-me
 DATABASE_URL=sqlite:voxium.db
+DISCORD_CLIENT_ID=your_discord_app_client_id
+DISCORD_CLIENT_SECRET=your_discord_app_client_secret
+DISCORD_REDIRECT_URI=http://127.0.0.1:1420/
 ```
 
 Without `.env`, the default DB is created automatically: `sqlite:voxium.db`.
@@ -142,7 +147,13 @@ Edit `discord-app/src/runtime-config.js`:
 window.VOXIUM_RUNTIME_CONFIG = {
   apiBaseUrl: "http://192.168.1.42:8080",
   wsUrl: "ws://192.168.1.42:8080/ws",
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  discordAuthorizeBaseUrl: "https://discord.com/oauth2/authorize",
+  discordClientId: "YOUR_DISCORD_APP_CLIENT_ID",
+  discordRedirectUri: "http://127.0.0.1:1420/auth/discord/callback",
+  discordScope: "identify email guilds",
+  discordResponseType: "code",
+  discordPrompt: "consent"
 };
 ```
 
@@ -220,9 +231,19 @@ This is caused by the current Tauri config (`frontendDist: "../"`).
 For local development, use `npm run tauri dev`.
 
 ### Client cannot connect to backend
-- Check `API` / `WS_URL` in `discord-app/src/main.js`
+- Check `apiBaseUrl` / `wsUrl` in `discord-app/src/runtime-config.js`
 - Check CSP in `discord-app/src-tauri/tauri.conf.json`
 - Check port/firewall (`8080`)
+
+### Discord login does not work
+- Verify backend env: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_REDIRECT_URI`
+- The redirect URI configured in the Discord developer portal must exactly match `DISCORD_REDIRECT_URI`
+- Ensure `discordClientId` and `discordRedirectUri` are set in `discord-app/src/runtime-config.js`
+
+### Calling Discord APIs from the custom client
+- Use `window.VoxiumDiscord.request('/users/@me/guilds')` once logged in via Discord
+- Calls are forwarded through `POST /api/discord/proxy` with your linked Discord OAuth token
+- Message example: `window.VoxiumDiscord.request('/channels/<channel_id>/messages', { method: 'POST', body: { content: 'hello' } })`
 
 ### Database issues
 - Check `DATABASE_URL`

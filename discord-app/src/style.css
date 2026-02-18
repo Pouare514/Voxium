@@ -343,6 +343,51 @@ body {
     min-height: 18px;
 }
 
+#auth-form #auth-submit,
+#auth-form #auth-discord-btn {
+    width: 100%;
+}
+
+.auth-separator {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.auth-separator::before,
+.auth-separator::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--bg-modifier-active);
+}
+
+.btn-discord {
+    padding: 12px 24px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-normal);
+    font-family: var(--font);
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.btn-discord:hover {
+    background: var(--bg-modifier-hover);
+}
+
+.btn-discord:active {
+    transform: translateY(1px);
+}
+
 .success-text {
     color: var(--green);
     font-size: 13px;

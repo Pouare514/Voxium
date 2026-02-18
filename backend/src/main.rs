@@ -45,8 +45,12 @@ async fn main() -> std::io::Result<()> {
             // Auth
             .route("/api/register", web::post().to(auth::register))
             .route("/api/login", web::post().to(auth::login))
+            .route("/api/auth/discord/config", web::get().to(auth::get_discord_oauth_config))
+            .route("/api/auth/discord/exchange", web::post().to(auth::exchange_discord_oauth))
             .route("/api/users/me", web::get().to(auth::get_me))
             .route("/api/users/me", web::patch().to(auth::update_profile))
+            .route("/api/discord/me", web::get().to(auth::get_discord_me))
+            .route("/api/discord/proxy", web::post().to(auth::discord_proxy))
             .route("/api/users/{id}", web::delete().to(auth::delete_user))
             .route("/api/users/{id}/role", web::patch().to(auth::update_user_role))
             .route("/api/server/roles", web::get().to(auth::list_server_roles))

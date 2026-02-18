@@ -138,6 +138,14 @@ pub async fn init_db() -> SqlitePool {
         }
     }
 
+    let migration_013 = include_str!("../../migrations/013_add_discord_oauth.sql");
+    for statement in migration_013.split(';') {
+        let trimmed = statement.trim();
+        if !trimmed.is_empty() {
+            sqlx::query(trimmed).execute(&pool).await.ok();
+        }
+    }
+
     println!("✅ Database initialized");
     pool
 }
