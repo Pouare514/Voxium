@@ -1,6 +1,6 @@
 # Voxium
 
-A Discord-like clone (text/voice chat + roles + moderation) built with:
+A modern Discord-like application (text/voice chat + roles + moderation) with full Discord integration, built with:
 
 - Rust backend (`actix-web` + `sqlx` + SQLite)
 - Tauri frontend + HTML/CSS/JS
@@ -10,6 +10,7 @@ A Discord-like clone (text/voice chat + roles + moderation) built with:
 ## Table of Contents
 
 - [Features](#features)
+- [Discord Integration](#discord-integration)
 - [Roadmap](#roadmap)
 - [Technical Docs](#technical-docs)
 - [Prerequisites](#prerequisites)
@@ -23,37 +24,70 @@ A Discord-like clone (text/voice chat + roles + moderation) built with:
 
 ## Features
 
+### Core
 - Authentication (register/login)
-- Discord OAuth login (optional)
-- Text and voice channels
-- Real-time messaging via WebSocket
-- Image uploads
-- Replies, pins, advanced search
+- Text and voice channels with real-time messaging (WebSocket)
+- Image uploads, replies, pins, advanced search
 - Server roles + room-level permissions
 - Server/room settings in the UI
-- Discord REST bridge endpoint (`/api/discord/proxy`) for custom client experiments
+
+### UI
+- Discord-inspired interface with guild bar, sidebar, chat area, and members panel
+- Dark theme with smooth transitions and hover effects
+- Pill indicators, active states, and guild icon system
+- Collapsible channel categories
+- Markdown rendering in messages (bold, italic, code blocks, spoilers, links)
+- Embed previews and message reactions
+- Infinite scroll (older messages loaded on scroll-up)
+
+### Discord Integration
+- **Integrated Discord mode** — browse your real Discord servers, DMs, and channels directly inside Voxium using the same UI layout (guild bar, sidebar, chat area)
+- Discord servers displayed in the guild bar with the exact same order as your official Discord client (via `guild_folders`)
+- DMs sorted by most recent conversation
+- Full channel browsing with categories, text & voice channel icons
+- Message rendering with Discord markdown, embeds, attachments, stickers, and reactions
+- Send messages to Discord channels from within Voxium
+- QR code remote authentication for Discord token linking
+- Discord REST bridge endpoint (`/api/discord/proxy`)
 
 ---
 
 ## Roadmap
 
+### Done ✅
+
+- [x] Core text/voice chat system
+- [x] Role-based permissions + admin tools
+- [x] Image uploads, replies, pins, search
+- [x] **Discord-inspired UI** (guild bar, sidebar, chat area, members panel)
+- [x] **Discord integration v1** — browse servers, DMs, channels, and messages using the native Voxium UI
+- [x] Guild ordering matching official Discord client (`guild_folders`)
+- [x] DM sorting by most recent message
+- [x] Discord message rendering (markdown, embeds, reactions, attachments, stickers)
+- [x] Send messages to Discord from Voxium
+- [x] QR remote auth for Discord token linking
+
 ### Short term
 
-- Better multi-user stability on LAN/Internet
-- Faster room/server settings workflows (admin UX)
-- Cleaner Tauri build configuration for packaging
+- [ ] Typing indicators in Discord mode
+- [ ] Discord thread support
+- [ ] Presence / online status display
+- [ ] Better multi-user stability on LAN/Internet
+- [ ] Faster room/server settings workflows (admin UX)
 
 ### Mid term
 
-- More robust notifications (mentions, presence, activity)
-- Advanced moderation tools (logs, bulk actions)
-- Better DB performance and message pagination
+- [ ] Discord voice channel integration (listen/join)
+- [ ] More robust notifications (mentions, presence, activity)
+- [ ] Advanced moderation tools (logs, bulk actions)
+- [ ] Better DB performance and message pagination
+- [ ] Cleaner Tauri build configuration for packaging
 
 ### Exploratory
 
-- **Custom client compatibility with official Discord APIs** (research preview)
-  - only if it can be done properly and safely
-  - disabled by default in this project
+- [ ] Discord Gateway WebSocket (real-time events without polling)
+- [ ] Multi-account Discord support
+- [ ] Plugin / extension system
 
 ---
 
