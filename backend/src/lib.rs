@@ -6,6 +6,7 @@ pub mod remote_auth;
 pub mod rooms;
 pub mod uploads;
 pub mod ws;
+pub mod crypto;
 
 use actix_cors::Cors;
 use actix_files::Files;

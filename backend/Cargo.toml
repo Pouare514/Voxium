@@ -27,3 +27,6 @@ sha2 = "0.10"
 base64 = "0.22"
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.22"

@@ -307,8 +307,9 @@ pub(crate) async fn do_discord_token_login(
             let banner_url: Option<String> = row.try_get("banner_url").unwrap_or(None);
             let merged_avatar_url = discord_avatar.clone().or(old_avatar_url);
 
+            let encrypted_token = crate::crypto::encrypt_token(discord_token);
             let _ = sqlx::query("UPDATE users SET discord_access_token = ?, discord_refresh_token = NULL, discord_token_expires_at = NULL, avatar_url = ? WHERE id = ?")
-                .bind(discord_token)
+                .bind(encrypted_token)
                 .bind(&merged_avatar_url)
                 .bind(&user_id)
                 .execute(pool)
@@ -326,6 +327,7 @@ pub(crate) async fn do_discord_token_login(
             let generated_password = Uuid::new_v4().to_string();
             let password_hash = hash(generated_password, DEFAULT_COST).expect("hash failed");
 
+            let encrypted_token = crate::crypto::encrypt_token(discord_token);
             let insert_result = sqlx::query("INSERT INTO users (id, username, password_hash, role, avatar_color, about, avatar_url, banner_url, discord_id, discord_access_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
                 .bind(&user_id)
                 .bind(&username)
@@ -336,7 +338,7 @@ pub(crate) async fn do_discord_token_login(
                 .bind(&discord_avatar)
                 .bind(&banner_url)
                 .bind(&discord_user.id)
-                .bind(discord_token)
+                .bind(encrypted_token)
                 .execute(pool)
                 .await;
 
@@ -406,9 +408,15 @@ pub async fn get_discord_me(req: HttpRequest, pool: web::Data<SqlitePool>) -> Ht
 
     let access_token: Option<String> = row.try_get("discord_access_token").unwrap_or(None);
 
-    let Some(access_token) = access_token else {
+    let Some(encrypted_token) = access_token else {
         return HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Aucun token Discord lié"
+        }));
+    };
+
+    let Some(access_token) = crate::crypto::decrypt_token(&encrypted_token) else {
+         return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "Echec du déchiffrement du token"
         }));
     };
 
@@ -474,9 +482,15 @@ pub async fn discord_proxy(
 
     let access_token: Option<String> = row.try_get("discord_access_token").unwrap_or(None);
 
-    let Some(access_token) = access_token else {
+    let Some(encrypted_token) = access_token else {
         return HttpResponse::BadRequest().json(serde_json::json!({
             "error": "Aucun token Discord lié"
+        }));
+    };
+
+    let Some(access_token) = crate::crypto::decrypt_token(&encrypted_token) else {
+         return HttpResponse::InternalServerError().json(serde_json::json!({
+            "error": "Echec du déchiffrement du token"
         }));
     };
 

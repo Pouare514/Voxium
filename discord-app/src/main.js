@@ -441,7 +441,7 @@ function cancelDiscordQrAuth(message = "Connexion QR annulée.") {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ session_id: discordQrSessionId }),
-        }).catch(() => {});
+        }).catch(() => { });
     }
     cleanupDiscordQr();
     resetDiscordQrUi();
@@ -721,7 +721,7 @@ async function fetchMyProfile() {
 function updateUserPanel() {
     userAvatar.className = `user-avatar avatar-bg-${state.avatarColor % 8}`;
     if (state.avatarUrl) {
-        userAvatar.innerHTML = `<img src="${API}${state.avatarUrl}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`;
+        userAvatar.innerHTML = `<img src="${API}${escapeHtml(state.avatarUrl)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`;
     } else {
         userAvatar.textContent = state.username[0].toUpperCase();
     }
@@ -1421,7 +1421,7 @@ function renderMembers() {
         const li = document.createElement("li");
         const status = normalizePresence(u.status || "online");
         const avatarContent = u.avatar_url
-            ? `<img src="${API}${u.avatar_url}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
+            ? `<img src="${API}${escapeHtml(u.avatar_url)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
             : u.username[0].toUpperCase();
         li.innerHTML = `
             <div class="member-avatar-wrapper">
@@ -3470,7 +3470,7 @@ function renderUserPopoutContent(uid, user) {
     // Avatar
     popoutAvatar.className = `popout-avatar avatar-bg-${colorIndex}`;
     popoutAvatar.innerHTML = user.avatar_url
-        ? `<img src="${API}${user.avatar_url}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
+        ? `<img src="${API}${escapeHtml(user.avatar_url)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
         : user.username[0].toUpperCase();
 
     // Banner color

@@ -253,7 +253,7 @@ window.VoxiumVoice = (() => {
                 const colorIndex = ((colorRaw % 8) + 8) % 8;
 
                 const avatarHtml = userMeta.avatar_url
-                    ? `<img src="${deps.API}${userMeta.avatar_url}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
+                    ? `<img src="${deps.API}${deps.escapeHtml(userMeta.avatar_url)}" style="width:100%;height:100%;border-radius:50%;object-fit:cover">`
                     : deps.escapeHtml((member.username || "U")[0].toUpperCase());
 
                 const badges = [];
