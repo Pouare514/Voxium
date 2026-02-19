@@ -238,8 +238,11 @@ pub async fn delete_message(
 
     // 3. Delete uploaded image if any
     if let Some(ref url) = msg.image_url {
-        let path = url.trim_start_matches('/');
-        std::fs::remove_file(path).ok();
+        // SECURITY: Prevent path traversal
+        let clean_path = url.trim_start_matches('/');
+        if clean_path.starts_with("uploads/") && !clean_path.contains("..") {
+             std::fs::remove_file(clean_path).ok();
+        }
     }
 
     // 4. Delete related reactions + message from DB

@@ -40,14 +40,25 @@ async fn start_server() -> std::io::Result<()> {
     println!("🚀 Backend running at http://{}", bind_addr);
 
     HttpServer::new(move || {
+        // CORS: Restrict to Tauri and local dev
         let cors = Cors::default()
-            .allow_any_origin()
+            .allowed_origin("tauri://localhost")
+            .allowed_origin("http://localhost:1420")
+            .allowed_origin("http://127.0.0.1:1420")
             .allow_any_method()
             .allow_any_header()
             .max_age(3600);
 
+        // Rate Limiting: 10 req/s with burst of 20
+        let governor_conf = actix_governor::GovernorConfigBuilder::default()
+            .per_second(10)
+            .burst_size(20)
+            .finish()
+            .unwrap();
+
         App::new()
             .wrap(cors)
+            .wrap(actix_governor::Governor::new(&governor_conf))
             .app_data(web::Data::new(pool.clone()))
             .app_data(web::Data::new(broadcaster.clone()))
             .app_data(web::Data::new(online_users.clone()))
@@ -97,7 +108,7 @@ async fn start_server() -> std::io::Result<()> {
             .route("/api/rooms/{room_id}/pins", web::get().to(messages::get_pinned_messages))
             // Uploads
             .route("/api/upload", web::post().to(uploads::upload_image))
-            // Serve uploaded files
+            // Serve uploaded files - DISABLE directory listing if enabled by default, but actix-files doesn't by default
             .service(Files::new("/uploads", "uploads"))
             // WebSocket
             .route("/ws", web::get().to(ws::ws_handler))

@@ -193,6 +193,64 @@ pub async fn ws_handler(
     let allowed_rooms: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
     let is_admin = Arc::new(Mutex::new(false));
 
+    // Authenticate immediately
+    use crate::auth::validate_token;
+    
+    // Try to get token from query string first
+    let query_string = req.query_string();
+    let mut token = None;
+    
+    if let Ok(params) = serde_urlencoded::from_str::<HashMap<String, String>>(query_string) {
+        if let Some(t) = params.get("access_token") {
+             token = Some(t.clone());
+        }
+    }
+    
+    // Fallback to Authorization header
+    if token.is_none() {
+        if let Some(auth_header) = req.headers().get("Authorization") {
+             if let Ok(auth_str) = auth_header.to_str() {
+                 if let Some(t) = auth_str.strip_prefix("Bearer ") {
+                     token = Some(t.to_string());
+                 }
+             }
+        }
+    }
+
+    let claims = match token {
+        Some(t) => match validate_token(&t) {
+            Some(claims) => claims,
+            None => return Err(actix_web::error::ErrorUnauthorized("Invalid token")),
+        },
+        None => return Err(actix_web::error::ErrorUnauthorized("No token provided")),
+    };
+
+    // Pre-hydrate user session
+    my_user_id = Some(claims.sub.clone());
+    
+    // Fetch initial state
+    let role = get_user_role_cached(&pool, &access_cache, &claims.sub)
+        .await
+        .unwrap_or_else(|| "user".to_string());
+    let rooms = fetch_accessible_rooms(&pool, &role).await;
+    {
+        let mut guard = allowed_rooms.lock().unwrap();
+        *guard = rooms;
+    }
+    {
+        let mut admin_guard = is_admin.lock().unwrap();
+        *admin_guard = role == "admin";
+    }
+    
+    // Add to online users
+    {
+         let mut guard = users.lock().unwrap();
+         // We don't have avatar_color here without DB query, default to 0 for now. 
+         // Realistically we should fetch user profile or include it in token if needed, 
+         // but for now 0 is safe. 
+         guard.insert(claims.sub.clone(), 0);
+    }
+
     // Spawn task: forward broadcast messages to this client
     let mut send_session = session.clone();
     let send_allowed_rooms = allowed_rooms.clone();
@@ -229,43 +287,24 @@ pub async fn ws_handler(
                 Message::Text(text) => {
                     if let Ok(mut ws_msg) = serde_json::from_str::<WsMessage>(&text) {
                         
-                        // Handle JOIN
+                        // Handle JOIN - REFACTORED: 
+                        // We ignore user_id from client. We trust our JWT claims.
+                        // We still listen to "join" to broadcast presence if client wants to announce specific details 
+                        // like updated avatar/status, but we override identity.
                         if ws_msg.msg_type == "join" {
-                            if let (Some(uid), Some(_uname), Some(color)) = (&ws_msg.user_id, &ws_msg.username, ws_msg.avatar_color) {
-                                my_user_id = Some(uid.clone());
-
-                                let role = get_user_role_cached(&pool, &access_cache, uid)
-                                    .await
-                                    .unwrap_or_else(|| "user".to_string());
-                                let rooms = fetch_accessible_rooms(&pool, &role).await;
-                                {
-                                    let mut guard = allowed_rooms.lock().unwrap();
-                                    *guard = rooms;
-                                }
-                                {
-                                    let mut admin_guard = is_admin.lock().unwrap();
-                                    *admin_guard = role == "admin";
-                                }
-
-                                {
-                                    let mut guard = users.lock().unwrap();
-                                    guard.insert(uid.clone(), color);
+                             if let Some(uid) = &my_user_id {
+                                // Force ID to match token
+                                ws_msg.user_id = Some(uid.clone());
+                                
+                                // Update color in map if provided
+                                if let Some(color) = ws_msg.avatar_color {
+                                     let mut guard = users.lock().unwrap();
+                                     guard.insert(uid.clone(), color);
                                 }
                                 
-                                // Broadcast join with all details
-                                let join_msg = serde_json::json!({
-                                    "type": "join",
-                                    "user_id": uid,
-                                    "username": _uname,
-                                    "avatar_color": color,
-                                    "avatar_url": ws_msg.avatar_url,
-                                    "banner_url": ws_msg.banner_url,
-                                    "status": ws_msg.status,
-                                    "role": ws_msg.role,
-                                    "about": ws_msg.about
-                                });
-                                let _ = tx.send(join_msg.to_string());
-                            }
+                                // Broadcast join
+                                let _ = tx.send(serde_json::to_string(&ws_msg).unwrap());
+                             }
                         }
                         // Handle LEAVE (explicit)
                         else if ws_msg.msg_type == "leave" {
@@ -281,6 +320,11 @@ pub async fn ws_handler(
                                 // Handle MESSAGE
                         else if ws_msg.msg_type == "message" {
                              if let (Some(content), Some(rid), Some(uid), Some(uname)) = (&ws_msg.content, &ws_msg.room_id, &ws_msg.user_id, &ws_msg.username) {
+                                // SECURITY: Force user_id to match token
+                                if Some(uid) != my_user_id.as_ref() {
+                                    continue;
+                                }
+
                                 let allowed = can_user_access_room_cached(&pool, &access_cache, uid, rid).await;
 
                                 if !allowed {

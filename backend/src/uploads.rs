@@ -41,7 +41,7 @@ pub async fn upload_image(
             .to_lowercase();
 
         // Only allow image types
-        let allowed = ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp"];
+        let allowed = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
         if !allowed.contains(&extension.as_str()) {
             return HttpResponse::BadRequest().json(serde_json::json!({
                 "error": "Only image files are allowed (png, jpg, jpeg, gif, webp, svg, bmp)"

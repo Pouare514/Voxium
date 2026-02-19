@@ -68,7 +68,7 @@ pub(crate) struct DiscordUser {
 // ── JWT helpers ─────────────────────────────────────────
 
 fn jwt_secret() -> String {
-    std::env::var("JWT_SECRET").unwrap_or_else(|_| "default_secret".into())
+    std::env::var("JWT_SECRET").expect("JWT_SECRET must be set")
 }
 
 pub fn create_token(user_id: &str, username: &str, role: &str) -> String {
@@ -173,9 +173,9 @@ pub async fn register(
     body: web::Json<AuthPayload>,
 ) -> HttpResponse {
     let username = body.username.trim();
-    if username.is_empty() || body.password.len() < 4 {
+    if username.is_empty() || body.password.len() < 8 {
         return HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "Username must be non-empty and password at least 4 characters"
+            "error": "Username must be non-empty and password at least 8 characters"
         }));
     }
 
@@ -252,10 +252,10 @@ pub async fn login(
                 banner_url,
             })
         } else {
-            HttpResponse::Unauthorized().json(serde_json::json!({ "error": "Invalid password" }))
+             HttpResponse::Unauthorized().json(serde_json::json!({ "error": "Invalid username or password" }))
         }
     } else {
-        HttpResponse::Unauthorized().json(serde_json::json!({ "error": "User not found" }))
+        HttpResponse::Unauthorized().json(serde_json::json!({ "error": "Invalid username or password" }))
     }
 }
 
@@ -451,9 +451,18 @@ pub async fn discord_proxy(
     };
 
     let path = body.path.trim();
-    if path.is_empty() || !path.starts_with('/') || path.starts_with("//") || path.starts_with("/http") {
+    if path.is_empty() || !path.starts_with('/') || path.starts_with("//") {
+         return HttpResponse::BadRequest().json(serde_json::json!({
+             "error": "Discord path invalide"
+         }));
+    }
+
+    // Whitelist allowed paths
+    let allowed_paths = ["/users/@me", "/users/@me/guilds"];
+    let is_allowed = allowed_paths.iter().any(|p| path.starts_with(p));
+    if !is_allowed {
         return HttpResponse::BadRequest().json(serde_json::json!({
-            "error": "Discord path invalide"
+             "error": "Path not allowed"
         }));
     }
 

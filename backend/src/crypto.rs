@@ -7,10 +7,7 @@ use std::env;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 pub fn get_key() -> [u8; 32] {
-    let key_str = env::var("ENCRYPTION_KEY").unwrap_or_else(|_| {
-        eprintln!("WARNING: ENCRYPTION_KEY not set, using default dev key. THIS IS UNSAFE FOR PRODUCTION.");
-        "00000000000000000000000000000000".to_string()
-    });
+    let key_str = env::var("ENCRYPTION_KEY").expect("ENCRYPTION_KEY must be set");
     
     let mut key = [0u8; 32];
     // If key is hex, decode it, otherwise just bytes (naive)
